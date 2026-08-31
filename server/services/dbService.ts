@@ -68,14 +68,20 @@ export class DatabaseService {
         return;
       }
 
-      // Check if there are any admins at all.
-      const allAdmins = await db.select().from(schema.adminUsers).limit(1);
-      if (allAdmins.length > 0) {
-        console.log('[BOOTSTRAP] Database already contains admin users. Skipping automatic superadmin seed.');
-        return;
+      // If they explicitly configured a custom admin email in the environment,
+      // we MUST create it regardless of whether other admins exist!
+      const isCustomConfig = !!process.env.ADMIN_INITIAL_EMAIL;
+
+      if (!isCustomConfig) {
+        // Check if there are any admins at all.
+        const allAdmins = await db.select().from(schema.adminUsers).limit(1);
+        if (allAdmins.length > 0) {
+          console.log('[BOOTSTRAP] Database already contains admin users. Skipping automatic superadmin seed.');
+          return;
+        }
       }
 
-      console.log(`[BOOTSTRAP] No admin users found. Creating superadmin account: ${email}...`);
+      console.log(`[BOOTSTRAP] Creating superadmin account: ${email}...`);
       const salt = bcrypt.genSaltSync(10);
       const passwordHash = bcrypt.hashSync(password, salt);
 

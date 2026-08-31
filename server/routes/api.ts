@@ -500,6 +500,14 @@ apiRouter.post('/webhooks/paystack', async (req: Request, res: Response) => {
 // AUTHENTICATION ENDPOINTS
 // ==========================================
 
+apiRouter.get('/auth/initial-info', async (req: Request, res: Response) => {
+  const customEmail = process.env.ADMIN_INITIAL_EMAIL || null;
+  res.json({
+    hasCustomAdmin: !!customEmail,
+    initialEmail: customEmail || 'admin@apexgrowth.digital',
+  });
+});
+
 apiRouter.post('/auth/login', rateLimit(10, 60 * 1000), async (req: Request, res: Response) => {
   try {
     const { email, password } = LoginSchema.parse(req.body);

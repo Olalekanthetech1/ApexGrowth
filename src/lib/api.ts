@@ -139,6 +139,8 @@ export const api = {
     }>(`/payments/paystack/verify/${encodeURIComponent(reference)}`),
 
   // Auth
+  getInitialInfo: () =>
+    request<{ hasCustomAdmin: boolean; initialEmail: string }>('/auth/initial-info'),
   login: (credentials: { email: string; password: string }) =>
     request<{ success: boolean; token: string; user: AdminUser }>('/auth/login', {
       method: 'POST',

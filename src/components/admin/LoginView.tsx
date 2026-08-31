@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Zap, Lock, Mail, ArrowRight, ShieldCheck, AlertCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { api } from '../../lib/api';
 
 interface LoginViewProps {
   onBackToSite: () => void;
@@ -8,11 +9,27 @@ interface LoginViewProps {
 
 export function LoginView({ onBackToSite }: LoginViewProps) {
   const { login } = useAuth();
-  const [email, setEmail] = useState('admin@apexgrowth.digital');
-  const [password, setPassword] = useState('ApexGrowthAdmin2026!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [initialInfo, setInitialInfo] = useState<{ hasCustomAdmin: boolean; initialEmail: string } | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function fetchInitialInfo() {
+      try {
+        const info = await api.getInitialInfo();
+        setInitialInfo(info);
+        if (info.hasCustomAdmin && info.initialEmail) {
+          setEmail(info.initialEmail);
+        }
+      } catch (err) {
+        // Fallback gracefully without setting any hardcoded values
+      }
+    }
+    fetchInitialInfo();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,16 +67,6 @@ export function LoginView({ onBackToSite }: LoginViewProps) {
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md px-4">
         <div className="glass-panel rounded-3xl p-8 border border-slate-800 shadow-2xl">
-          {/* Quick Demo Credentials Reminder Banner */}
-          <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs text-emerald-300 mb-6">
-            <div className="flex items-center gap-1.5 font-bold mb-1 text-emerald-400">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Initial Administrator Credentials</span>
-            </div>
-            <p className="font-mono text-[11px]">Email: admin@apexgrowth.digital</p>
-            <p className="font-mono text-[11px]">Password: ApexGrowthAdmin2026!</p>
-          </div>
-
           {error && (
             <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/40 text-xs text-red-200 mb-6 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
