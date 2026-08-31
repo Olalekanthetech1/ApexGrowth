@@ -1,6 +1,7 @@
 import { db } from '../../src/db/index.js';
 import * as schema from '../../src/db/schema.js';
 import { eq, desc, sql, or } from 'drizzle-orm';
+import bcrypt from 'bcryptjs';
 import {
   AdminUser,
   BusinessProfile,
@@ -54,6 +55,41 @@ export class DatabaseService {
   // ==========================================
   // AUTH & ADMIN USERS
   // ==========================================
+  async bootstrapInitialAdmin() {
+    const email = (process.env.ADMIN_INITIAL_EMAIL || 'admin@apexgrowth.digital').toLowerCase().trim();
+    const password = process.env.ADMIN_INITIAL_PASSWORD || 'ApexGrowthAdmin2026!';
+    const name = process.env.ADMIN_INITIAL_NAME || 'Lead Director';
+
+    try {
+      const existing = await this.findAdminByEmail(email);
+      if (existing) {
+        console.log(`[BOOTSTRAP] Initial admin user already exists in PostgreSQL: ${email}`);
+        return;
+      }
+
+      // Check if there are any admins at all.
+      const allAdmins = await db.select().from(schema.adminUsers).limit(1);
+      if (allAdmins.length > 0) {
+        console.log('[BOOTSTRAP] Database already contains admin users. Skipping automatic superadmin seed.');
+        return;
+      }
+
+      console.log(`[BOOTSTRAP] No admin users found. Creating superadmin account: ${email}...`);
+      const salt = bcrypt.genSaltSync(10);
+      const passwordHash = bcrypt.hashSync(password, salt);
+
+      await this.createAdminUser({
+        email,
+        name,
+        role: 'superadmin',
+        passwordHash,
+      });
+      console.log(`[BOOTSTRAP] Initial superadmin created successfully with email: ${email}`);
+    } catch (err: any) {
+      console.error('[BOOTSTRAP] Failed to bootstrap initial admin user:', err.message);
+    }
+  }
+
   async findAdminByEmail(email: string) {
     const rows = await db
       .select()

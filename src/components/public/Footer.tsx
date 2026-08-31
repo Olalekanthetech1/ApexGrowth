@@ -196,18 +196,8 @@ export function Footer({ onOpenAdmin, onNavigate }: FooterProps) {
               System &amp; Security
             </h4>
             <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-              Protected administration interface with session verification, RBAC, and audit trails.
+              Protected administration interface with session verification, RBAC, and secure OAuth and database audit trails.
             </p>
-            {onOpenAdmin && (
-              <button
-                id="footer-admin-login-btn"
-                onClick={onOpenAdmin}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/40 text-xs font-semibold text-slate-200 transition-all flex items-center justify-center gap-2"
-              >
-                <Lock className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Admin Login</span>
-              </button>
-            )}
           </div>
         </div>
 

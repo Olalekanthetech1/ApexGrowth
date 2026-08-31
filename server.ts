@@ -4,8 +4,10 @@ dotenv.config();
 import express from 'express';
 import path from 'path';
 import cookieParser from 'cookie-parser';
+import { execSync } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/routes/api.js';
+import { dbService } from './server/services/dbService.js';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
@@ -133,6 +135,22 @@ Sitemap: ${baseUrl}/sitemap.xml`;
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+  }
+
+  // Automatic schema sync on startup
+  try {
+    console.log('🔄 Syncing database schema with Drizzle-kit...');
+    execSync('npx drizzle-kit push', { stdio: 'inherit' });
+    console.log('✅ Schema synchronization completed successfully.');
+  } catch (err: any) {
+    console.warn('⚠️ Warning: Automatic schema sync failed, proceeding anyway:', err.message);
+  }
+
+  // Automatic admin account bootstrap
+  try {
+    await dbService.bootstrapInitialAdmin();
+  } catch (err: any) {
+    console.error('❌ Failed to run initial administrator bootstrap:', err.message);
   }
 
   app.listen(PORT, '0.0.0.0', () => {

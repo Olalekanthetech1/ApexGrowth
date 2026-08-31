@@ -13,6 +13,7 @@ export function Navbar({ onOpenAdmin, currentPath = '/', onNavigate }: NavbarPro
   const { business, contact } = usePublicData();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [logoClicks, setLogoClicks] = useState(0);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -21,6 +22,23 @@ export function Navbar({ onOpenAdmin, currentPath = '/', onNavigate }: NavbarPro
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  useEffect(() => {
+    if (logoClicks === 0) return;
+    const timer = setTimeout(() => {
+      setLogoClicks(0);
+    }, 3000); // Reset clicks after 3 seconds of inactivity
+    return () => clearTimeout(timer);
+  }, [logoClicks]);
+
+  useEffect(() => {
+    if (logoClicks >= 5) {
+      setLogoClicks(0);
+      if (onOpenAdmin) {
+        onOpenAdmin();
+      }
+    }
+  }, [logoClicks, onOpenAdmin]);
 
   const navLinks = [
     { name: 'Services', path: '/services', sectionId: 'services' },
@@ -70,6 +88,7 @@ export function Navbar({ onOpenAdmin, currentPath = '/', onNavigate }: NavbarPro
             href="/"
             onClick={(e) => {
               e.preventDefault();
+              setLogoClicks((prev) => prev + 1);
               if (currentPath === '/') {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               } else if (onNavigate) {
@@ -124,18 +143,6 @@ export function Navbar({ onOpenAdmin, currentPath = '/', onNavigate }: NavbarPro
           <div className="hidden md:flex items-center gap-3">
             <ThemeToggle />
 
-            {onOpenAdmin && (
-              <button
-                id="navbar-admin-btn"
-                onClick={onOpenAdmin}
-                className="text-xs text-slate-400 hover:text-emerald-400 px-3 py-1.5 rounded-lg border border-slate-800 hover:border-emerald-500/40 hover:bg-slate-900/60 transition-all flex items-center gap-1.5"
-                title="Access Secure Admin Portal"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Admin</span>
-              </button>
-            )}
-
             <button
               id="navbar-start-project-btn"
               onClick={() => {
@@ -151,17 +158,6 @@ export function Navbar({ onOpenAdmin, currentPath = '/', onNavigate }: NavbarPro
           {/* Mobile menu trigger */}
           <div className="flex md:hidden items-center gap-2">
             <ThemeToggle compact />
-
-            {onOpenAdmin && (
-              <button
-                id="mobile-admin-btn"
-                onClick={onOpenAdmin}
-                className="p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-emerald-400"
-                aria-label="Admin Portal"
-              >
-                <ShieldCheck className="w-4 h-4" />
-              </button>
-            )}
 
             <button
               id="mobile-menu-toggle"
