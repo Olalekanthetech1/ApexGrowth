@@ -140,7 +140,7 @@ Sitemap: ${baseUrl}/sitemap.xml`;
   // Automatic schema sync on startup
   try {
     console.log('🔄 Syncing database schema with Drizzle-kit...');
-    execSync('npx drizzle-kit push', { stdio: 'inherit' });
+    execSync('npx drizzle-kit push --config=src/db/drizzle.config.ts', { stdio: 'inherit' });
     console.log('✅ Schema synchronization completed successfully.');
   } catch (err: any) {
     console.warn('⚠️ Warning: Automatic schema sync failed, proceeding anyway:', err.message);
@@ -149,6 +149,7 @@ Sitemap: ${baseUrl}/sitemap.xml`;
   // Automatic admin account bootstrap
   try {
     await dbService.bootstrapInitialAdmin();
+    await dbService.bootstrapPaymentMethods();
   } catch (err: any) {
     console.error('❌ Failed to run initial administrator bootstrap:', err.message);
   }

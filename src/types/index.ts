@@ -196,6 +196,20 @@ export interface FAQ {
   updatedAt: string;
 }
 
+export interface Testimonial {
+  id: string;
+  clientName: string;
+  clientRole: string;
+  companyName?: string;
+  avatarUrl?: string;
+  rating: number;
+  content: string;
+  published: boolean;
+  displayOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type LeadStatus = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
 
 export interface LeadNote {
@@ -260,6 +274,7 @@ export interface PublicAppData {
   pricing: PricingPackage[];
   demos: DemoItem[];
   faqs: FAQ[];
+  testimonials?: Testimonial[];
   paymentMethods: PaymentMethod[];
   seo: SEOSettings;
 }
@@ -269,6 +284,7 @@ export interface DashboardStats {
   activePackages: number;
   publishedDemos: number;
   publishedFaqs: number;
+  publishedTestimonials?: number;
   totalLeads: number;
   newLeads: number;
   leadsByStatus: Record<LeadStatus, number>;

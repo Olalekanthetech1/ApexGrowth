@@ -37,7 +37,7 @@ export function PricingSection({ onNavigate }: PricingSectionProps = {}) {
   };
 
   return (
-    <section id="pricing" className="py-20 md:py-28 relative bg-slate-100/50 dark:bg-slate-950/70 border-t border-slate-200 dark:border-slate-900 transition-colors">
+    <section id="pricing" className="py-20 md:py-28 relative overflow-hidden bg-slate-100/50 dark:bg-slate-950/70 border-t border-slate-200 dark:border-slate-900 transition-colors">
       {/* Glow */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[350px] bg-emerald-500/5 blur-[150px] pointer-events-none -z-10" />
 

@@ -12,7 +12,7 @@ export function FAQSection() {
   };
 
   return (
-    <section id="faq" className="py-20 md:py-28 relative bg-slate-950/80 border-t border-slate-900">
+    <section id="faq" className="py-20 md:py-28 relative overflow-hidden bg-slate-950/80 border-t border-slate-900">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
         {/* Section Header */}
         <div className="text-center mb-14">

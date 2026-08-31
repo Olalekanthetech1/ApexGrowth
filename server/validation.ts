@@ -174,6 +174,17 @@ export const FAQSchema = z.object({
   displayOrder: z.number().int().nonnegative().optional(),
 });
 
+export const TestimonialSchema = z.object({
+  clientName: z.string().min(2, 'Client name must be at least 2 characters'),
+  clientRole: z.string().min(2, 'Client role must be at least 2 characters'),
+  companyName: z.string().optional().or(z.literal('')),
+  avatarUrl: z.string().optional().or(z.literal('')),
+  rating: z.number().int().min(1).max(5).default(5),
+  content: z.string().min(3, 'Testimonial content must be at least 3 characters'),
+  published: z.boolean(),
+  displayOrder: z.number().int().nonnegative().optional(),
+});
+
 export const SEOSettingsSchema = z.object({
   pageTitle: z.string().min(2, 'Page title required'),
   metaDescription: z.string().min(10, 'Meta description required'),

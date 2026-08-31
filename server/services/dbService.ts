@@ -12,6 +12,7 @@ import {
   PricingPackage,
   DemoItem,
   FAQ,
+  Testimonial,
   Lead,
   LeadNote,
   SEOSettings,
@@ -87,6 +88,74 @@ export class DatabaseService {
       console.log(`[BOOTSTRAP] Initial superadmin created successfully with email: ${email}`);
     } catch (err: any) {
       console.error('[BOOTSTRAP] Failed to bootstrap initial admin user:', err.message);
+    }
+  }
+
+  async bootstrapPaymentMethods() {
+    try {
+      const existing = await db.select().from(schema.paymentMethods);
+      const providers = existing.map(pm => pm.provider);
+
+      if (!providers.includes('paystack')) {
+        await db.insert(schema.paymentMethods).values({
+          id: 'pay_paystack',
+          provider: 'paystack',
+          displayName: 'Paystack Card Gateway',
+          type: 'api_integration',
+          paymentUrl: 'https://checkout.paystack.com',
+          currency: 'USD',
+          description: 'Secure multi-currency credit/debit card and bank transfer checkout.',
+          instructions: 'Pay instantly using Mastercard, Visa, Verve, or Direct Bank Transfer.',
+          active: true,
+          displayOrder: 1,
+          isDirectLink: false,
+          configMetadata: { publicKey: '', secretKey: '', testMode: true }
+        });
+        console.log('[BOOTSTRAP] Seeded Paystack Payment Gateway');
+      }
+
+      if (!providers.includes('bybit')) {
+        await db.insert(schema.paymentMethods).values({
+          id: 'pay_bybit',
+          provider: 'bybit',
+          displayName: 'Bybit Multi-Currency Crypto Gateway',
+          type: 'api_integration',
+          paymentUrl: '',
+          currency: 'USD',
+          description: 'Automated USDT, BTC, and multi-chain crypto checkout with live rate calculation.',
+          instructions: 'Transfer the exact crypto amount to the generated deposit address on the specified network.',
+          active: true,
+          displayOrder: 2,
+          isDirectLink: false,
+          configMetadata: { apiKey: '', apiSecret: '', testMode: true, addresses: {} }
+        });
+        console.log('[BOOTSTRAP] Seeded Bybit Crypto Gateway');
+      }
+
+      if (!providers.includes('grey')) {
+        await db.insert(schema.paymentMethods).values({
+          id: 'pay_grey',
+          provider: 'grey',
+          displayName: 'Grey Bank Wire Gateway',
+          type: 'bank_transfer',
+          paymentUrl: '',
+          currency: 'USD',
+          description: 'Direct local and international USD, GBP, and EUR receiving accounts.',
+          instructions: 'Initiate a bank transfer or wire to the receiving account matching your currency.',
+          active: true,
+          displayOrder: 3,
+          isDirectLink: false,
+          configMetadata: {
+            usd: { beneficiary: '', bankName: '', accountNumber: '', accountType: 'Checking', routingNumber: '', bankAddress: '' },
+            gbp: { beneficiary: '', bankName: '', accountNumber: '', accountType: '', routingNumber: '', bankAddress: '' },
+            eur: { beneficiary: '', bankName: '', accountNumber: '', accountType: '', routingNumber: '', bankAddress: '' },
+            enabled: true
+          }
+        });
+        console.log('[BOOTSTRAP] Seeded Grey Bank Wire Gateway');
+      }
+    } catch (err: any) {
+      console.error('[BOOTSTRAP] Failed to bootstrap payment methods:', err.message);
     }
   }
 
@@ -175,7 +244,7 @@ export class DatabaseService {
   // PUBLIC AGGREGATOR
   // ==========================================
   async getPublicData(): Promise<PublicAppData> {
-    const [bpRows, csRows, slRows, sRows, pkgRows, dRows, faqRows, pmRows, seoRows] = await Promise.all([
+    const [bpRows, csRows, slRows, sRows, pkgRows, dRows, faqRows, pmRows, seoRows, testimonialRows] = await Promise.all([
       db.select().from(schema.businessProfile).limit(1),
       db.select().from(schema.contactSettings).limit(1),
       db.select().from(schema.socialLinks).where(eq(schema.socialLinks.enabled, true)).orderBy(schema.socialLinks.displayOrder),
@@ -185,6 +254,7 @@ export class DatabaseService {
       db.select().from(schema.faqs).where(eq(schema.faqs.published, true)).orderBy(schema.faqs.displayOrder),
       db.select().from(schema.paymentMethods).where(eq(schema.paymentMethods.active, true)).orderBy(schema.paymentMethods.displayOrder),
       db.select().from(schema.seoSettings).limit(1),
+      db.select().from(schema.testimonials).where(eq(schema.testimonials.published, true)).orderBy(schema.testimonials.displayOrder),
     ]);
 
     const business = bpRows[0] || {
@@ -283,6 +353,11 @@ export class DatabaseService {
         createdAt: f.createdAt.toISOString(),
         updatedAt: f.updatedAt.toISOString(),
       })),
+      testimonials: testimonialRows.map((t) => ({
+        ...t,
+        createdAt: t.createdAt.toISOString(),
+        updatedAt: t.updatedAt.toISOString(),
+      })),
       paymentMethods: pmRows.map((pm) => ({
         ...pm,
         provider: pm.provider as any,
@@ -345,7 +420,33 @@ export class DatabaseService {
 
   async getContactSettings() {
     const rows = await db.select().from(schema.contactSettings).limit(1);
-    return rows[0] || null;
+    if (rows.length === 0) {
+      const defaultContact = {
+        id: 'contact_01',
+        businessEmail: 'info@apexgrowth.digital',
+        supportEmail: 'support@apexgrowth.digital',
+        phone: '+15550192834',
+        whatsappNumber: '+15550192834',
+        whatsappUrl: 'https://wa.me/15550192834',
+        whatsappPrefilledMessage: 'Hello ApexGrowth, I would like to inquire about your digital growth services.',
+        whatsappButtonText: 'Chat on WhatsApp',
+        floatingWhatsappEnabled: true,
+        heroCtaEnabled: true,
+        pricingCtaEnabled: true,
+      };
+      try {
+        const [inserted] = await db.insert(schema.contactSettings).values(defaultContact).returning();
+        return inserted;
+      } catch (err: any) {
+        console.error('[DB] Failed to auto-seed default contact settings, returning in-memory:', err.message);
+        return {
+          ...defaultContact,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+      }
+    }
+    return rows[0];
   }
 
   async updateContactSettings(updates: Partial<Omit<ContactSettings, 'id' | 'createdAt' | 'updatedAt'>>) {
@@ -608,10 +709,88 @@ export class DatabaseService {
   // DEMOS & FAQS
   // ==========================================
   async getDemos(activeOnly = false) {
-    if (activeOnly) {
-      return await db.select().from(schema.demos).where(eq(schema.demos.active, true)).orderBy(schema.demos.displayOrder);
+    const rows = await db.select().from(schema.demos).orderBy(schema.demos.displayOrder);
+    if (rows.length === 0) {
+      const defaultDemos = [
+        {
+          id: 'demo_video_01',
+          type: 'video_ad_script',
+          title: 'Interactive Video Ad Script Preview',
+          subtitle: 'Direct-Response Script Architecture Breakdown',
+          description: 'Experience how direct-response hook mechanics, problem amplification, and CTA structuring turn passive viewers into active buyers.',
+          active: true,
+          displayOrder: 1,
+          config: {
+            scenes: [
+              {
+                timestamp: '0:00 – 0:03',
+                title: 'Hook',
+                script: '"Stop using standard moisturizer if your skin still looks dull by noon."',
+                visualDirection: 'Split-screen comparison: Left side showing dull midday skin vs. right side glowing hydrated finish with subtle kinetic typography overlay.',
+                type: 'hook',
+              },
+              {
+                timestamp: '0:04 – 0:15',
+                title: 'Problem & Agitation',
+                script: '"Most formulas lose their effect quickly because they don\'t properly support the skin\'s moisture barrier."',
+                visualDirection: 'Macro close-up texture shot showing skin surface dehydration simulation and moisture-loss 3D layer graphic.',
+                type: 'problem',
+              },
+              {
+                timestamp: '0:16 – 0:30',
+                title: 'Solution & CTA',
+                script: '"This serum is designed to help lock in hydration for longer. Tap Shop Now to discover the formula."',
+                visualDirection: 'Clean product application dropper shot, radiant skin close-up, premium product packaging hero shot with animated "Shop Now" pulse button.',
+                type: 'solution',
+              },
+            ],
+          },
+        },
+        {
+          id: 'demo_checkout_01',
+          type: 'checkout_sim',
+          title: 'Interactive Checkout Simulation',
+          subtitle: 'DEMO — NO REAL PAYMENT',
+          description: 'Test the friction-free customer checkout experience across card, regional bank transfers, and multi-network crypto.',
+          active: true,
+          displayOrder: 2,
+          config: {
+            productTitle: 'Conversion Launchpad Demo',
+            productPrice: 249,
+            currencySymbol: '$',
+            supportedTabs: ['Paystack Demo', 'Crypto Demo'],
+          },
+        }
+      ];
+
+      try {
+        const insertedList = [];
+        for (const d of defaultDemos) {
+          const [inserted] = await db.insert(schema.demos).values(d).returning();
+          insertedList.push(inserted);
+        }
+        if (activeOnly) {
+          return insertedList.filter(d => d.active);
+        }
+        return insertedList;
+      } catch (err: any) {
+        console.error('[DB] Failed to auto-seed default demos, returning in-memory:', err.message);
+        const memoryDemos = defaultDemos.map(d => ({
+          ...d,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }));
+        if (activeOnly) {
+          return memoryDemos.filter(d => d.active);
+        }
+        return memoryDemos;
+      }
     }
-    return await db.select().from(schema.demos).orderBy(schema.demos.displayOrder);
+
+    if (activeOnly) {
+      return rows.filter(d => d.active);
+    }
+    return rows;
   }
 
   async createDemo(data: { type: string; title: string; subtitle?: string; description: string; active: boolean; displayOrder?: number; config?: any }) {
@@ -685,6 +864,61 @@ export class DatabaseService {
 
   async deleteFAQ(id: string) {
     const res = await db.delete(schema.faqs).where(eq(schema.faqs.id, id)).returning();
+    return res.length > 0;
+  }
+
+  // ==========================================
+  // TESTIMONIALS
+  // ==========================================
+  async getTestimonials(publishedOnly = false) {
+    if (publishedOnly) {
+      return await db.select().from(schema.testimonials).where(eq(schema.testimonials.published, true)).orderBy(schema.testimonials.displayOrder);
+    }
+    return await db.select().from(schema.testimonials).orderBy(schema.testimonials.displayOrder);
+  }
+
+  async createTestimonial(data: {
+    clientName: string;
+    clientRole: string;
+    companyName?: string;
+    avatarUrl?: string;
+    rating?: number;
+    content: string;
+    published: boolean;
+    displayOrder?: number;
+  }) {
+    const id = `test_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const [inserted] = await db
+      .insert(schema.testimonials)
+      .values({
+        id,
+        clientName: data.clientName,
+        clientRole: data.clientRole,
+        companyName: data.companyName || null,
+        avatarUrl: data.avatarUrl || null,
+        rating: data.rating ?? 5,
+        content: data.content,
+        published: data.published ?? true,
+        displayOrder: data.displayOrder ?? 0,
+      })
+      .returning();
+    return inserted;
+  }
+
+  async updateTestimonial(id: string, updates: Partial<Omit<Testimonial, 'id' | 'createdAt' | 'updatedAt'>>) {
+    const [updated] = await db
+      .update(schema.testimonials)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.testimonials.id, id))
+      .returning();
+    return updated || null;
+  }
+
+  async deleteTestimonial(id: string) {
+    const res = await db.delete(schema.testimonials).where(eq(schema.testimonials.id, id)).returning();
     return res.length > 0;
   }
 
@@ -1662,6 +1896,7 @@ export class DatabaseService {
       leadsList,
       pmCount,
       recentLogs,
+      testimonialsCount,
     ] = await Promise.all([
       db.select({ count: sql<number>`count(*)` }).from(schema.services).where(eq(schema.services.published, true)),
       db.select({ count: sql<number>`count(*)` }).from(schema.pricingPackages).where(eq(schema.pricingPackages.active, true)),
@@ -1670,6 +1905,7 @@ export class DatabaseService {
       this.getLeads(),
       db.select({ count: sql<number>`count(*)` }).from(schema.paymentMethods).where(eq(schema.paymentMethods.active, true)),
       this.getAuditLogs(10),
+      db.select({ count: sql<number>`count(*)` }).from(schema.testimonials).where(eq(schema.testimonials.published, true)),
     ]);
 
     const leadsByStatus: Record<LeadStatus, number> = {
@@ -1692,6 +1928,7 @@ export class DatabaseService {
       activePackages: Number(packagesCount[0]?.count || 0),
       publishedDemos: Number(demosCount[0]?.count || 0),
       publishedFaqs: Number(faqsCount[0]?.count || 0),
+      publishedTestimonials: Number(testimonialsCount[0]?.count || 0),
       totalLeads: leadsList.length,
       newLeads: leadsByStatus.new,
       leadsByStatus,
@@ -1699,6 +1936,30 @@ export class DatabaseService {
       recentLeads: leadsList.slice(0, 5),
       recentAuditLogs: recentLogs,
     };
+  }
+
+  async getDatabaseTableCounts() {
+    const [adminCount, leadsCount, demosCount, faqsCount, servicesCount, packagesCount, testimonialsCount, paymentMethodsCount] = await Promise.all([
+      db.select({ count: sql<number>`count(*)` }).from(schema.adminUsers),
+      db.select({ count: sql<number>`count(*)` }).from(schema.leads),
+      db.select({ count: sql<number>`count(*)` }).from(schema.demos),
+      db.select({ count: sql<number>`count(*)` }).from(schema.faqs),
+      db.select({ count: sql<number>`count(*)` }).from(schema.services),
+      db.select({ count: sql<number>`count(*)` }).from(schema.pricingPackages),
+      db.select({ count: sql<number>`count(*)` }).from(schema.testimonials),
+      db.select({ count: sql<number>`count(*)` }).from(schema.paymentMethods),
+    ]);
+
+    return [
+      { name: 'admin_users', rows: Number(adminCount[0]?.count || 0), description: 'System administrators and access control' },
+      { name: 'leads', rows: Number(leadsCount[0]?.count || 0), description: 'Live CRM entries and potential clients' },
+      { name: 'demos', rows: Number(demosCount[0]?.count || 0), description: 'Interactive demo videos and scripts' },
+      { name: 'faqs', rows: Number(faqsCount[0]?.count || 0), description: 'Clarifications and turnaround content' },
+      { name: 'services', rows: Number(servicesCount[0]?.count || 0), description: 'Value pillars and service listings' },
+      { name: 'pricing_packages', rows: Number(packagesCount[0]?.count || 0), description: 'Commercial packages and subscription bundles' },
+      { name: 'testimonials', rows: Number(testimonialsCount[0]?.count || 0), description: 'Social proof, reviews, and ratings' },
+      { name: 'payment_methods', rows: Number(paymentMethodsCount[0]?.count || 0), description: 'Integrated checkout gateways and settings' },
+    ];
   }
 
   // ==========================================

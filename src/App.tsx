@@ -177,7 +177,7 @@ function MainApp() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-emerald-500 selection:text-slate-950 flex flex-col justify-between transition-colors duration-200">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-emerald-500 selection:text-slate-950 flex flex-col justify-between transition-colors duration-200 overflow-x-hidden w-full max-w-full">
       <Navbar currentPath={currentPath} onNavigate={navigateTo} onOpenAdmin={() => navigateTo('/admin')} />
       <div className="flex-1">
         {renderPublicContent()}

@@ -9,6 +9,7 @@ import {
   PricingPackage,
   DemoItem,
   FAQ,
+  Testimonial,
   PaymentMethod,
   SEOSettings,
   Lead,
@@ -258,6 +259,23 @@ export const api = {
       method: 'DELETE',
     }),
 
+  // Admin Testimonials
+  getTestimonials: () => request<Testimonial[]>('/admin/testimonials'),
+  createTestimonial: (data: Partial<Testimonial>) =>
+    request<Testimonial>('/admin/testimonials', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateTestimonial: (id: string, data: Partial<Testimonial>) =>
+    request<Testimonial>(`/admin/testimonials/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteTestimonial: (id: string) =>
+    request<{ success: boolean }>(`/admin/testimonials/${id}`, {
+      method: 'DELETE',
+    }),
+
   // Admin SEO
   getSEOSettings: () => request<SEOSettings>('/admin/seo'),
   updateSEOSettings: (data: Partial<SEOSettings>) =>
@@ -265,6 +283,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+
+  // Database Management
+  getDatabaseStatus: () => request<{
+    status: string;
+    connectionPool: { active: boolean; dialect: string; ssl: boolean; host: string; latencyMs: number };
+    tables: { name: string; rows: number; description: string }[];
+  }>('/admin/db-status'),
 
   // Admin Payments
   getPaymentMethods: () => request<PaymentMethod[]>('/admin/payments'),

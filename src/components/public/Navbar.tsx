@@ -14,6 +14,34 @@ export function Navbar({ onOpenAdmin, currentPath = '/', onNavigate }: NavbarPro
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [logoClicks, setLogoClicks] = useState(0);
+  const [pressTimer, setPressTimer] = useState<any>(null);
+
+  const handleStartPress = () => {
+    const timer = setTimeout(() => {
+      if (onNavigate) {
+        onNavigate('/admin');
+      } else if (onOpenAdmin) {
+        onOpenAdmin();
+      }
+    }, 2000);
+    setPressTimer(timer);
+  };
+
+  const handleEndPress = () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      setPressTimer(null);
+    }
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (onNavigate) {
+      onNavigate('/admin');
+    } else if (onOpenAdmin) {
+      onOpenAdmin();
+    }
+  };
 
   useEffect(() => {
     const handleScroll = () => {
@@ -95,7 +123,14 @@ export function Navbar({ onOpenAdmin, currentPath = '/', onNavigate }: NavbarPro
                 onNavigate('/');
               }
             }}
-            className="flex items-center gap-2.5 group cursor-pointer"
+            onDoubleClick={handleDoubleClick}
+            onMouseDown={handleStartPress}
+            onMouseUp={handleEndPress}
+            onMouseLeave={handleEndPress}
+            onTouchStart={handleStartPress}
+            onTouchEnd={handleEndPress}
+            className="flex items-center gap-2.5 group cursor-pointer select-none"
+            title="Double-click or Long-press 2s for Admin"
           >
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 via-emerald-500 to-indigo-600 p-0.5 shadow-md shadow-emerald-500/20 group-hover:shadow-emerald-500/40 transition-all duration-300 flex items-center justify-center">
               <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">

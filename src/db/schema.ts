@@ -183,6 +183,27 @@ export const faqs = pgTable(
   ]
 );
 
+// 9b. Testimonials Table
+export const testimonials = pgTable(
+  'testimonials',
+  {
+    id: text('id').primaryKey(),
+    clientName: text('client_name').notNull(),
+    clientRole: text('client_role').notNull(),
+    companyName: text('company_name'),
+    avatarUrl: text('avatar_url'),
+    rating: integer('rating').default(5).notNull(),
+    content: text('content').notNull(),
+    published: boolean('published').default(true).notNull(),
+    displayOrder: integer('display_order').default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('testimonials_published_idx').on(table.published),
+  ]
+);
+
 // 10. Leads CRM Table
 export const leads = pgTable(
   'leads',

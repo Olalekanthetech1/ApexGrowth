@@ -50,7 +50,7 @@ export function ServicesSection({ onNavigate }: ServicesSectionProps = {}) {
   };
 
   return (
-    <section id="services" className="py-20 md:py-28 relative bg-slate-100/50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-900 transition-colors">
+    <section id="services" className="py-20 md:py-28 relative overflow-hidden bg-slate-100/50 dark:bg-slate-950/60 border-t border-slate-200 dark:border-slate-900 transition-colors">
       {/* Background accents */}
       <div className="absolute top-1/2 left-0 w-96 h-96 bg-emerald-500/5 blur-[120px] pointer-events-none" />
       <div className="absolute bottom-0 right-0 w-96 h-96 bg-indigo-600/5 blur-[120px] pointer-events-none" />
