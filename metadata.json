@@ -1,0 +1,6 @@
+{
+  "name": "ApexGrowth Digital",
+  "description": "Full-production web application for ApexGrowth Digital featuring dynamic services, pricing, interactive ad script and checkout demos, lead CRM, and a secure administration dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
