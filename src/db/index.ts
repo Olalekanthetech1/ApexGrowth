@@ -9,13 +9,22 @@ declare global {
 export const createPool = () => {
   if (!global._postgresPool) {
     if (process.env.DATABASE_URL) {
+      let connectionString = process.env.DATABASE_URL;
+
+      // Automatically append Neon SSL compatibility parameters to prevent warnings and connection disruptions
+      if (connectionString.includes('neon.tech') && !connectionString.includes('sslmode=')) {
+        const separator = connectionString.includes('?') ? '&' : '?';
+        connectionString = `${connectionString}${separator}uselibpqcompat=true&sslmode=require`;
+      }
+
       const isSslNeeded =
-        process.env.DATABASE_URL.includes('sslmode=require') ||
-        process.env.DATABASE_URL.includes('render.com') ||
+        connectionString.includes('sslmode=require') ||
+        connectionString.includes('sslmode=verify-full') ||
+        connectionString.includes('render.com') ||
         process.env.NODE_ENV === 'production';
 
       global._postgresPool = new Pool({
-        connectionString: process.env.DATABASE_URL,
+        connectionString,
         max: 10,
         connectionTimeoutMillis: 15000,
         ssl: isSslNeeded ? { rejectUnauthorized: false } : undefined,
