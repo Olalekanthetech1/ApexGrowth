@@ -14,9 +14,20 @@ import {
   MoveDown,
   Loader2,
 } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
 import { api } from '../../lib/api';
 import { Service } from '../../types/index';
 import { usePublicData } from '../../context/PublicDataContext';
+
+// Dynamic Icon Renderer Component
+function DynamicIcon({ name, className }: { name: string; className?: string }) {
+  const IconComponent = (LucideIcons as any)[name];
+  if (!IconComponent) {
+    // Return a default icon if not found
+    return <LucideIcons.HelpCircle className={className} />;
+  }
+  return <IconComponent className={className} />;
+}
 
 export function ServicesManager() {
   const { refreshPublicData } = usePublicData();
@@ -27,18 +38,39 @@ export function ServicesManager() {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Expanded icon selection including all requested and classic icons
   const availableIcons = [
-    'TrendingUp',
-    'Layout',
-    'CreditCard',
+    'Target',
+    'Megaphone',
     'Video',
+    'Play',
+    'Clapperboard',
+    'Film',
+    'Users',
+    'Filter',
+    'Layout',
+    'Monitor',
+    'BarChart3',
+    'Activity',
+    'TrendingUp',
     'Smartphone',
     'MessageSquare',
     'SearchCheck',
     'PenTool',
     'Zap',
     'Layers',
+    'Sparkles',
+    'Globe',
+    'ShieldCheck',
+    'Award',
+    'Heart',
+    'Mail',
+    'Custom' // Special value to toggle direct text input
   ];
+
+  // State to track if custom text input is selected
+  const [isCustomIcon, setIsCustomIcon] = useState(false);
+  const [customIconText, setCustomIconText] = useState('');
 
   useEffect(() => {
     loadServices();
@@ -58,6 +90,8 @@ export function ServicesManager() {
 
   const handleStartAdd = () => {
     setIsNew(true);
+    setIsCustomIcon(false);
+    setCustomIconText('');
     setEditingService({
       title: '',
       slug: '',
@@ -71,6 +105,9 @@ export function ServicesManager() {
 
   const handleStartEdit = (service: Service) => {
     setIsNew(false);
+    const inList = availableIcons.filter(x => x !== 'Custom').includes(service.iconName);
+    setIsCustomIcon(!inList);
+    setCustomIconText(inList ? '' : service.iconName);
     setEditingService({ ...service });
   };
 
@@ -220,16 +257,47 @@ export function ServicesManager() {
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Icon Representation</label>
                 <select
-                  value={editingService.iconName || 'Zap'}
-                  onChange={(e) => setEditingService({ ...editingService, iconName: e.target.value })}
+                  value={isCustomIcon ? 'Custom' : (editingService.iconName || 'Zap')}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'Custom') {
+                      setIsCustomIcon(true);
+                      setEditingService({ ...editingService, iconName: customIconText || 'Zap' });
+                    } else {
+                      setIsCustomIcon(false);
+                      setEditingService({ ...editingService, iconName: val });
+                    }
+                  }}
                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white outline-none"
                 >
                   {availableIcons.map((ico) => (
                     <option key={ico} value={ico}>
-                      {ico}
+                      {ico === 'Custom' ? '✨ Custom (Enter any Lucide name)' : ico}
                     </option>
                   ))}
                 </select>
+
+                {isCustomIcon && (
+                  <div className="mt-2">
+                    <label className="block text-[10px] font-semibold text-emerald-400 mb-0.5">Custom Lucide Icon Name</label>
+                    <input
+                      type="text"
+                      value={customIconText}
+                      onChange={(e) => {
+                        const text = e.target.value;
+                        setCustomIconText(text);
+                        setEditingService({ ...editingService, iconName: text || 'Zap' });
+                      }}
+                      placeholder="e.g. Megaphone, Film, Play"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-1.5 text-xs text-white outline-none font-mono"
+                    />
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 mt-2 bg-slate-950/80 border border-slate-850 rounded-xl px-3 py-1.5">
+                  <DynamicIcon name={editingService.iconName || 'Zap'} className="w-4 h-4 text-emerald-400" />
+                  <span className="text-[11px] text-slate-400 font-mono truncate">Preview: {editingService.iconName || 'Zap'}</span>
+                </div>
               </div>
 
               <div>
@@ -322,8 +390,9 @@ export function ServicesManager() {
           >
             <div>
               <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
-                  #{service.displayOrder} • {service.iconName}
+                <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 flex items-center gap-1.5">
+                  <DynamicIcon name={service.iconName} className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>#{service.displayOrder} • {service.iconName}</span>
                 </span>
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold tracking-wider ${

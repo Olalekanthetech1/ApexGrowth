@@ -1,4 +1,5 @@
 import React from 'react';
+import * as LucideIcons from 'lucide-react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -28,19 +29,6 @@ interface ServiceDetailPageProps {
   onOpenCheckout?: () => void;
 }
 
-const iconMap: Record<string, React.ElementType> = {
-  TrendingUp,
-  Layout: Layers,
-  CreditCard,
-  Video,
-  Smartphone,
-  MessageSquare,
-  SearchCheck,
-  PenTool,
-  Zap,
-  Layers,
-};
-
 export function ServiceDetailPage({
   slug,
   onNavigate,
@@ -67,7 +55,7 @@ export function ServiceDetailPage({
     );
   }
 
-  const IconComponent = iconMap[service.iconName] || Zap;
+  const IconComponent = (LucideIcons as any)[service.iconName] || LucideIcons.Zap;
 
   const whatsappLink = contact.whatsappUrl
     ? `${contact.whatsappUrl}?text=${encodeURIComponent(

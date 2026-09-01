@@ -1,4 +1,5 @@
 import React from 'react';
+import * as LucideIcons from 'lucide-react';
 import {
   TrendingUp,
   Layout,
@@ -15,19 +16,6 @@ import {
 } from 'lucide-react';
 import { usePublicData } from '../../context/PublicDataContext';
 import { Service } from '../../types/index';
-
-const iconMap: Record<string, React.ElementType> = {
-  TrendingUp,
-  Layout,
-  CreditCard,
-  Video,
-  Smartphone,
-  MessageSquare,
-  SearchCheck,
-  PenTool,
-  Zap,
-  Layers,
-};
 
 interface ServicesSectionProps {
   onNavigate?: (path: string) => void;
@@ -88,7 +76,7 @@ export function ServicesSection({ onNavigate }: ServicesSectionProps = {}) {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {services.map((service: Service, idx: number) => {
-              const IconComponent = iconMap[service.iconName] || Zap;
+              const IconComponent = (LucideIcons as any)[service.iconName] || LucideIcons.Zap;
               return (
                 <div
                   key={service.id}

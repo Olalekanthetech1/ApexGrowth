@@ -1,4 +1,5 @@
 import React from 'react';
+import * as LucideIcons from 'lucide-react';
 import {
   TrendingUp,
   Layout,
@@ -22,19 +23,6 @@ import { Service } from '../../../types/index';
 interface ServicesPageProps {
   onNavigate: (path: string) => void;
 }
-
-const iconMap: Record<string, React.ElementType> = {
-  TrendingUp,
-  Layout,
-  CreditCard,
-  Video,
-  Smartphone,
-  MessageSquare,
-  SearchCheck,
-  PenTool,
-  Zap,
-  Layers,
-};
 
 export function ServicesPage({ onNavigate }: ServicesPageProps) {
   const { services, isLoading } = usePublicData();
@@ -78,7 +66,7 @@ export function ServicesPage({ onNavigate }: ServicesPageProps) {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {services.map((service: Service, idx: number) => {
-              const IconComponent = iconMap[service.iconName] || Zap;
+              const IconComponent = (LucideIcons as any)[service.iconName] || LucideIcons.Zap;
               return (
                 <div
                   key={service.id}
