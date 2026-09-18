@@ -56,7 +56,7 @@ export class IntelligenceEngine {
     const relevanceSummary = this.buildAdaptiveRelevanceSummary(candidate, liveAudit);
 
     // 6. Run Lead Intelligence Gate Evaluation
-    const gateResult = this.evaluateOpportunityGate(candidate, liveAudit, publicContacts);
+    const gateResult = this.evaluateOpportunityGate(candidate, liveAudit, publicContacts, evidence);
 
     // 7. Generate consultative outreach draft ONLY if verified
     let outreachDraft = '';
@@ -103,7 +103,8 @@ export class IntelligenceEngine {
   public evaluateOpportunityGate(
     candidate: RawOpportunityCandidate,
     audit: LiveAuditResult | null,
-    contacts: PublicContact[]
+    contacts: PublicContact[],
+    evidence: EvidenceObservation[] = []
   ) {
     // 1. Identity Resolution (PROSPECT_STATED / IDENTITY_RESOLVED)
     // Non-placeholder name, not a generic handle, properly cased, and not anonymous
@@ -136,17 +137,15 @@ export class IntelligenceEngine {
     );
 
     // 4. Problem Explicit (PROSPECT_STATED)
-    // Explicit growth or conversion drop-off pain points mentioned by prospect, ignoring loose general terms
-    const excerptLower = (candidate.sourcePostExcerpt || '').toLowerCase();
-    const strongStatedPhrases = [
-      'low conversion', 'dropoff', 'drop-off', 'bounce rate', 'abandoned cart',
-      'not converting', 'zero sales', 'no sales', 'losing money', 'checkout issue',
-      'cart abandonment', 'slow checkout', 'high bounce', 'lose customers',
-      'poor conversion', 'improve conversion', 'optimization help', 'cannot convert',
-      'struggling with sales', 'struggling to sell', 'low traffic'
-    ];
-    const problemExplicit = strongStatedPhrases.some(phrase => excerptLower.includes(phrase)) ||
-                            (candidate.detectedPainPoints || []).some(p => strongStatedPhrases.some(phrase => p.toLowerCase().includes(phrase)));
+    // For manual operator audits, we always bypass this gate. Otherwise, we strictly verify that there is evidence-backed prospect_stated quote
+    const isManualAudit = candidate.sourcePlatform === 'manual_audit';
+    const problemExplicit = isManualAudit || (evidence || []).some(
+      (e) =>
+        e.category === 'prospect_stated' &&
+        e.verified === true &&
+        e.observation &&
+        e.observation.includes('"')
+    );
 
     // 5. Confidence Score Math (Standardized to 0 - 100)
     const confidenceScores = {
@@ -622,16 +621,24 @@ MANDATORY RULES:
     } catch {
       domain = websiteUrl.toLowerCase().trim();
     }
+    const domainFirstPart = domain.split('.')[0].toLowerCase();
     const cleanBiz = businessName.toLowerCase().replace(/[^a-z0-9]/g, '');
     const cleanDomain = domain.replace(/[^a-z0-9]/g, '');
 
-    // Corroborate via string overlap
     const matchesDomain = cleanDomain.includes(cleanBiz) || cleanBiz.includes(cleanDomain);
 
-    // Corroborate via site metadata references
+    // Corroborate via site metadata references (independent website crawl)
     let matchesMeta = false;
     if (websiteMetaText) {
-      matchesMeta = websiteMetaText.toLowerCase().includes(businessName.toLowerCase());
+      matchesMeta = websiteMetaText.toLowerCase().includes(businessName.toLowerCase()) || 
+                    websiteMetaText.toLowerCase().includes(domainFirstPart);
+    }
+
+    // STRICT: If the business name is trivially derived from the domain first part,
+    // we require independent metadata crawl verification to pass independent corroboration.
+    const isTriviallyDerived = cleanBiz.includes(domainFirstPart) || domainFirstPart.includes(cleanBiz);
+    if (isTriviallyDerived) {
+      return matchesMeta;
     }
 
     return matchesDomain || matchesMeta;

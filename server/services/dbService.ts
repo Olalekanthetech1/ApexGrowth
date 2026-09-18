@@ -2379,7 +2379,7 @@ export class DatabaseService {
     updatedAt: new Date().toISOString(),
   };
 
-  private async ensureScoutTablesExist(): Promise<void> {
+  public async ensureScoutTablesExist(): Promise<void> {
     if (this.scoutTablesChecked) return;
     try {
       await db.execute(sql`
@@ -2627,9 +2627,15 @@ export class DatabaseService {
       this.scoutTablesChecked = true;
       this.useInMemoryScoutStore = false;
     } catch (err: any) {
-      console.error('[ensureScoutTablesExist] DB setup failure, using in-memory store:', err?.message || err);
-      this.scoutTablesChecked = true;
-      this.useInMemoryScoutStore = true;
+      console.error('[ensureScoutTablesExist] DB setup / migration failure:', err?.message || err);
+      if (process.env.NODE_ENV === 'test' || process.env.USE_IN_MEMORY_DB === 'true') {
+        console.warn('[ensureScoutTablesExist] Falling back to in-memory store because environment is test/in-memory-db.');
+        this.scoutTablesChecked = true;
+        this.useInMemoryScoutStore = true;
+      } else {
+        // STRICT fail-closed: throw setup failure instead of transparent fallback
+        throw new Error(`CRITICAL DB SETUP FAILURE: ${err?.message || err}`);
+      }
     }
   }
 
@@ -2907,113 +2913,135 @@ export class DatabaseService {
       return { saved, merged };
     }
 
-    return await db.transaction(async (tx) => {
-      const signalCheck = await tx.execute(sql`
-        SELECT id FROM opportunity_signals WHERE source_fingerprint = ${oppFingerprint} FOR UPDATE;
-      `);
-      if (signalCheck.rows && signalCheck.rows.length > 0) {
-        throw new Error('DUPLICATE_SIGNAL');
-      }
-
-      const mainOppCheck = await tx.execute(sql`
-        SELECT id FROM opportunities WHERE opportunity_fingerprint = ${oppFingerprint} FOR UPDATE;
-      `);
-      if (mainOppCheck.rows && mainOppCheck.rows.length > 0) {
-        throw new Error('DUPLICATE_SIGNAL');
-      }
-
-      const entityCheck = await tx.execute(sql`
-        SELECT id, evidence, public_contacts, confidence_scores, verification_status, is_verified_opportunity
-        FROM opportunities
-        WHERE entity_fingerprint = ${entFingerprint}
-        FOR UPDATE;
-      `);
-
-      let saved: Opportunity;
-      let merged = false;
-
-      if (entityCheck.rows && entityCheck.rows.length > 0) {
-        const existingId = entityCheck.rows[0].id as string;
-        const currentEvidence = (entityCheck.rows[0].evidence as any) || [];
-        const currentContacts = (entityCheck.rows[0].public_contacts as any) || [];
-        const currentScores = (entityCheck.rows[0].confidence_scores as any) || {};
-        const currentStatus = (entityCheck.rows[0].verification_status as any) || {};
-        const currentIsVerified = Boolean(entityCheck.rows[0].is_verified_opportunity);
-
-        const newEvidence = [...currentEvidence];
-        for (const e of opportunity.evidence) {
-          if (!newEvidence.some((ex) => ex.observation === e.observation)) {
-            newEvidence.push(e);
+    let attempts = 0;
+    while (attempts < 3) {
+      try {
+        return await db.transaction(async (tx) => {
+          const signalCheck = await tx.execute(sql`
+            SELECT id FROM opportunity_signals WHERE source_fingerprint = ${oppFingerprint} FOR UPDATE;
+          `);
+          if (signalCheck.rows && signalCheck.rows.length > 0) {
+            throw new Error('DUPLICATE_SIGNAL');
           }
-        }
 
-        const newContacts = [...currentContacts];
-        for (const c of opportunity.publicContacts) {
-          if (!newContacts.some((cx) => cx.value === c.value && cx.type === c.type)) {
-            newContacts.push(c);
+          const mainOppCheck = await tx.execute(sql`
+            SELECT id FROM opportunities WHERE opportunity_fingerprint = ${oppFingerprint} FOR UPDATE;
+          `);
+          if (mainOppCheck.rows && mainOppCheck.rows.length > 0) {
+            throw new Error('DUPLICATE_SIGNAL');
           }
+
+          const entityCheck = await tx.execute(sql`
+            SELECT id, evidence, public_contacts, confidence_scores, verification_status, is_verified_opportunity
+            FROM opportunities
+            WHERE entity_fingerprint = ${entFingerprint}
+            FOR UPDATE;
+          `);
+
+          let saved: Opportunity;
+          let merged = false;
+
+          if (entityCheck.rows && entityCheck.rows.length > 0) {
+            const existingId = entityCheck.rows[0].id as string;
+            const currentEvidence = (entityCheck.rows[0].evidence as any) || [];
+            const currentContacts = (entityCheck.rows[0].public_contacts as any) || [];
+            const currentScores = (entityCheck.rows[0].confidence_scores as any) || {};
+            const currentStatus = (entityCheck.rows[0].verification_status as any) || {};
+            const currentIsVerified = Boolean(entityCheck.rows[0].is_verified_opportunity);
+
+            const newEvidence = [...currentEvidence];
+            for (const e of opportunity.evidence) {
+              if (!newEvidence.some((ex) => ex.observation === e.observation)) {
+                newEvidence.push(e);
+              }
+            }
+
+            const newContacts = [...currentContacts];
+            for (const c of opportunity.publicContacts) {
+              if (!newContacts.some((cx) => cx.value === c.value && cx.type === c.type)) {
+                newContacts.push(c);
+              }
+            }
+
+            const resolvedIsVerified = currentIsVerified || opportunity.isVerifiedOpportunity;
+
+            const resolvedScores = {
+              identity: Math.max(currentScores.identity || 0, opportunity.confidenceScores?.identity || 0),
+              company: Math.max(currentScores.company || 0, opportunity.confidenceScores?.company || 0),
+              contact: Math.max(currentScores.contact || 0, opportunity.confidenceScores?.contact || 0),
+              problem: Math.max(currentScores.problem || 0, opportunity.confidenceScores?.problem || 0),
+            };
+
+            const resolvedStatus = {
+              identityResolved: currentStatus.identityResolved || opportunity.verificationStatus?.identityResolved,
+              companyVerified: currentStatus.companyVerified || opportunity.verificationStatus?.companyVerified,
+              contactAvailable: currentStatus.contactAvailable || opportunity.verificationStatus?.contactAvailable,
+              problemExplicit: currentStatus.problemExplicit || opportunity.verificationStatus?.problemExplicit,
+              auditPerformed: currentStatus.auditPerformed || opportunity.verificationStatus?.auditPerformed,
+              isDeduplicated: currentStatus.isDeduplicated || opportunity.verificationStatus?.isDeduplicated,
+            };
+
+            await tx.execute(sql`
+              UPDATE opportunities
+              SET evidence = ${JSON.stringify(newEvidence)},
+                  public_contacts = ${JSON.stringify(newContacts)},
+                  confidence_scores = ${JSON.stringify(resolvedScores)},
+                  verification_status = ${JSON.stringify(resolvedStatus)},
+                  is_verified_opportunity = ${resolvedIsVerified},
+                  updated_at = NOW()
+              WHERE id = ${existingId};
+            `);
+
+            saved = (await this.getOpportunityByIdTx(tx, existingId))!;
+            merged = true;
+          } else {
+            await tx.execute(sql`
+              INSERT INTO opportunities (
+                id, opportunity_fingerprint, entity_fingerprint, title, prospect_name, business_name, website_url,
+                niche, source_platform, source_url, source_post_excerpt, relevance_summary, evidence, public_contacts,
+                confidence_scores, verification_status, is_verified_opportunity, opportunity_score, outreach_status,
+                outreach_draft, refined_draft, refinement_feedback, telegram_message_id, created_at, updated_at
+              ) VALUES (
+                ${opportunity.id}, ${opportunity.opportunityFingerprint || null}, ${opportunity.entityFingerprint || null},
+                ${opportunity.title}, ${opportunity.prospectName}, ${opportunity.businessName}, ${opportunity.websiteUrl || null},
+                ${opportunity.niche}, ${opportunity.sourcePlatform}, ${opportunity.sourceUrl}, ${opportunity.sourcePostExcerpt || null},
+                ${opportunity.relevanceSummary}, ${JSON.stringify(opportunity.evidence)}, ${JSON.stringify(opportunity.publicContacts)},
+                ${JSON.stringify(opportunity.confidenceScores)}, ${JSON.stringify(opportunity.verificationStatus)},
+                ${opportunity.isVerifiedOpportunity}, ${opportunity.opportunityScore}, ${opportunity.outreachStatus},
+                ${opportunity.outreachDraft}, ${opportunity.refinedDraft || null}, ${opportunity.refinementFeedback || null},
+                ${opportunity.telegramMessageId || null}, NOW(), NOW()
+              );
+            `);
+            saved = opportunity;
+          }
+
+          const signalId = `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          await tx.execute(sql`
+            INSERT INTO opportunity_signals (id, opportunity_id, source_platform, source_url, source_fingerprint, raw_excerpt)
+            VALUES (${signalId}, ${saved.id}, ${candidate.sourcePlatform}, ${candidate.sourceUrl}, ${oppFingerprint}, ${candidate.sourcePostExcerpt || null});
+          `);
+
+          return { saved, merged };
+        });
+      } catch (err: any) {
+        const errMsg = `${err?.message || ''} ${err?.cause?.message || ''} ${err?.cause?.detail || ''} ${JSON.stringify(err)}`;
+        const isUniqueViolation = 
+          err?.code === '23505' || 
+          err?.cause?.code === '23505' || 
+          errMsg.toLowerCase().includes('23505') || 
+          errMsg.toLowerCase().includes('duplicate key') || 
+          errMsg.toLowerCase().includes('unique constraint');
+          
+        if (isUniqueViolation && attempts < 2) {
+          attempts++;
+          console.warn(`[dbService] Concurrent insertion unique violation detected (attempt ${attempts}/3). Retrying transaction to trigger update merge path...`);
+          await new Promise((resolve) => setTimeout(resolve, 50 * attempts));
+          continue;
         }
-
-        const resolvedIsVerified = currentIsVerified || opportunity.isVerifiedOpportunity;
-
-        const resolvedScores = {
-          identity: Math.max(currentScores.identity || 0, opportunity.confidenceScores?.identity || 0),
-          company: Math.max(currentScores.company || 0, opportunity.confidenceScores?.company || 0),
-          contact: Math.max(currentScores.contact || 0, opportunity.confidenceScores?.contact || 0),
-          problem: Math.max(currentScores.problem || 0, opportunity.confidenceScores?.problem || 0),
-        };
-
-        const resolvedStatus = {
-          identityResolved: currentStatus.identityResolved || opportunity.verificationStatus?.identityResolved,
-          companyVerified: currentStatus.companyVerified || opportunity.verificationStatus?.companyVerified,
-          contactAvailable: currentStatus.contactAvailable || opportunity.verificationStatus?.contactAvailable,
-          problemExplicit: currentStatus.problemExplicit || opportunity.verificationStatus?.problemExplicit,
-          auditPerformed: currentStatus.auditPerformed || opportunity.verificationStatus?.auditPerformed,
-          isDeduplicated: currentStatus.isDeduplicated || opportunity.verificationStatus?.isDeduplicated,
-        };
-
-        await tx.execute(sql`
-          UPDATE opportunities
-          SET evidence = ${JSON.stringify(newEvidence)},
-              public_contacts = ${JSON.stringify(newContacts)},
-              confidence_scores = ${JSON.stringify(resolvedScores)},
-              verification_status = ${JSON.stringify(resolvedStatus)},
-              is_verified_opportunity = ${resolvedIsVerified},
-              updated_at = NOW()
-          WHERE id = ${existingId};
-        `);
-
-        saved = (await this.getOpportunityById(existingId))!;
-        merged = true;
-      } else {
-        await tx.execute(sql`
-          INSERT INTO opportunities (
-            id, opportunity_fingerprint, entity_fingerprint, title, prospect_name, business_name, website_url,
-            niche, source_platform, source_url, source_post_excerpt, relevance_summary, evidence, public_contacts,
-            confidence_scores, verification_status, is_verified_opportunity, opportunity_score, outreach_status,
-            outreach_draft, refined_draft, refinement_feedback, telegram_message_id, created_at, updated_at
-          ) VALUES (
-            ${opportunity.id}, ${opportunity.opportunityFingerprint || null}, ${opportunity.entityFingerprint || null},
-            ${opportunity.title}, ${opportunity.prospectName}, ${opportunity.businessName}, ${opportunity.websiteUrl || null},
-            ${opportunity.niche}, ${opportunity.sourcePlatform}, ${opportunity.sourceUrl}, ${opportunity.sourcePostExcerpt || null},
-            ${opportunity.relevanceSummary}, ${JSON.stringify(opportunity.evidence)}, ${JSON.stringify(opportunity.publicContacts)},
-            ${JSON.stringify(opportunity.confidenceScores)}, ${JSON.stringify(opportunity.verificationStatus)},
-            ${opportunity.isVerifiedOpportunity}, ${opportunity.opportunityScore}, ${opportunity.outreachStatus},
-            ${opportunity.outreachDraft}, ${opportunity.refinedDraft || null}, ${opportunity.refinementFeedback || null},
-            ${opportunity.telegramMessageId || null}, NOW(), NOW()
-          );
-        `);
-        saved = opportunity;
+        throw err;
       }
-
-      const signalId = `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      await tx.execute(sql`
-        INSERT INTO opportunity_signals (id, opportunity_id, source_platform, source_url, source_fingerprint, raw_excerpt)
-        VALUES (${signalId}, ${saved.id}, ${candidate.sourcePlatform}, ${candidate.sourceUrl}, ${oppFingerprint}, ${candidate.sourcePostExcerpt || null});
-      `);
-
-      return { saved, merged };
-    });
+    }
+    throw new Error('FAILED_TRANSACTION_RETRY_EXHAUSTED');
   }
 
   async createOpportunity(opp: Opportunity): Promise<Opportunity> {
@@ -3145,6 +3173,59 @@ export class DatabaseService {
     }
   }
 
+  private mapRowToOpportunity(r: any): Opportunity {
+    return {
+      id: r.id,
+      opportunityFingerprint: r.opportunityFingerprint || undefined,
+      entityFingerprint: r.entityFingerprint || undefined,
+      title: r.title,
+      prospectName: r.prospectName,
+      businessName: r.businessName,
+      websiteUrl: r.websiteUrl || undefined,
+      niche: r.niche,
+      sourcePlatform: r.sourcePlatform as any,
+      sourceUrl: r.sourceUrl,
+      sourcePostExcerpt: r.sourcePostExcerpt || undefined,
+      relevanceSummary: r.relevanceSummary,
+      evidence: (r.evidence as any) || [],
+      publicContacts: (r.publicContacts as any) || [],
+      confidenceScores: (r.confidenceScores as any) || undefined,
+      verificationStatus: (r.verificationStatus as any) || undefined,
+      isVerifiedOpportunity: r.isVerifiedOpportunity,
+      opportunityScore: r.opportunityScore as any,
+      outreachStatus: r.outreachStatus as any,
+      outreachDraft: r.outreachDraft,
+      refinedDraft: r.refinedDraft || undefined,
+      refinementFeedback: r.refinementFeedback || undefined,
+      telegramMessageId: r.telegramMessageId || undefined,
+      actionApprovedAt: r.actionApprovedAt ? r.actionApprovedAt.toISOString() : undefined,
+      actionSentAt: r.actionSentAt ? r.actionSentAt.toISOString() : undefined,
+      actionRejectedAt: r.actionRejectedAt ? r.actionRejectedAt.toISOString() : undefined,
+      sentChannel: r.sentChannel || undefined,
+      sentProvider: (r.sentProvider as any) || undefined,
+      outreachMessageId: r.outreachMessageId || undefined,
+      resendMessageId: r.resendMessageId || undefined,
+      recipientEmail: r.recipientEmail || undefined,
+      sendErrorReason: r.sendErrorReason || undefined,
+      emailSubject: r.emailSubject || undefined,
+      dispatchAttemptId: r.dispatchAttemptId || undefined,
+      dispatchAttemptAt: r.dispatchAttemptAt ? r.dispatchAttemptAt.toISOString() : undefined,
+      nextFollowUpDate: r.nextFollowUpDate ? r.nextFollowUpDate.toISOString() : undefined,
+      prospectReply: r.prospectReply || undefined,
+      prospectRepliedAt: r.prospectRepliedAt ? r.prospectRepliedAt.toISOString() : undefined,
+      dealId: r.dealId || undefined,
+      notes: r.notes || undefined,
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+    };
+  }
+
+  async getOpportunityByIdTx(tx: any, id: string): Promise<Opportunity | null> {
+    const rows = await tx.select().from(schema.opportunities).where(eq(schema.opportunities.id, id)).limit(1);
+    if (rows.length === 0) return null;
+    return this.mapRowToOpportunity(rows[0]);
+  }
+
   async getOpportunityById(id: string): Promise<Opportunity | null> {
     await this.ensureScoutTablesExist();
 
@@ -3155,38 +3236,7 @@ export class DatabaseService {
     try {
       const rows = await db.select().from(schema.opportunities).where(eq(schema.opportunities.id, id)).limit(1);
       if (rows.length === 0) return null;
-      const r = rows[0];
-      return {
-        id: r.id,
-        opportunityFingerprint: r.opportunityFingerprint || undefined,
-        entityFingerprint: r.entityFingerprint || undefined,
-        title: r.title,
-        prospectName: r.prospectName,
-        businessName: r.businessName,
-        websiteUrl: r.websiteUrl || undefined,
-        niche: r.niche,
-        sourcePlatform: r.sourcePlatform as any,
-        sourceUrl: r.sourceUrl,
-        sourcePostExcerpt: r.sourcePostExcerpt || undefined,
-        relevanceSummary: r.relevanceSummary,
-        evidence: (r.evidence as any) || [],
-        publicContacts: (r.publicContacts as any) || [],
-        confidenceScores: (r.confidenceScores as any) || undefined,
-        verificationStatus: (r.verificationStatus as any) || undefined,
-        isVerifiedOpportunity: r.isVerifiedOpportunity,
-        opportunityScore: r.opportunityScore as any,
-        outreachStatus: r.outreachStatus as any,
-        outreachDraft: r.outreachDraft,
-        refinedDraft: r.refinedDraft || undefined,
-        refinementFeedback: r.refinementFeedback || undefined,
-        telegramMessageId: r.telegramMessageId || undefined,
-        actionApprovedAt: r.actionApprovedAt ? r.actionApprovedAt.toISOString() : undefined,
-        actionSentAt: r.actionSentAt ? r.actionSentAt.toISOString() : undefined,
-        actionRejectedAt: r.actionRejectedAt ? r.actionRejectedAt.toISOString() : undefined,
-        notes: r.notes || undefined,
-        createdAt: r.createdAt.toISOString(),
-        updatedAt: r.updatedAt.toISOString(),
-      };
+      return this.mapRowToOpportunity(rows[0]);
     } catch {
       return this.inMemoryOpportunities.get(id) || null;
     }
@@ -3550,20 +3600,33 @@ export class DatabaseService {
     if (!opp) throw new Error(`Opportunity #${id} not found`);
 
     const now = new Date().toISOString();
+    const threshold = new Date(Date.now() - 30000);
+
+    if (this.useInMemoryScoutStore) {
+      const current = this.inMemoryOpportunities.get(id);
+      const isApproved = current?.outreachStatus === 'APPROVED';
+      const isExpiredDispatch = current?.outreachStatus === 'DISPATCHING' && 
+        (current.dispatchAttemptAt ? Date.now() - new Date(current.dispatchAttemptAt).getTime() >= 30000 : true);
+
+      if (!current || (!isApproved && !isExpiredDispatch)) {
+        throw new Error(`CONCURRENCY CONFLICT: Opportunity #${id} is not claimable.`);
+      }
+      
+      opp.outreachStatus = 'DISPATCHING';
+      opp.dispatchAttemptId = attemptId;
+      opp.dispatchAttemptAt = now;
+      if (recipientEmail) opp.recipientEmail = recipientEmail;
+      opp.updatedAt = now;
+      
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
     opp.outreachStatus = 'DISPATCHING';
     opp.dispatchAttemptId = attemptId;
     opp.dispatchAttemptAt = now;
     if (recipientEmail) opp.recipientEmail = recipientEmail;
     opp.updatedAt = now;
-
-    if (this.useInMemoryScoutStore) {
-      const current = this.inMemoryOpportunities.get(id);
-      if (!current || current.outreachStatus !== 'APPROVED') {
-        throw new Error(`CONCURRENCY CONFLICT: Opportunity #${id} is not in APPROVED state (current: ${current?.outreachStatus}).`);
-      }
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
-    }
 
     try {
       const result = await db.execute(sql`
@@ -3574,7 +3637,7 @@ export class DatabaseService {
             recipient_email = COALESCE(${recipientEmail || null}, recipient_email),
             updated_at = NOW()
         WHERE id = ${id}
-          AND outreach_status = 'APPROVED'
+          AND (outreach_status = 'APPROVED' OR (outreach_status = 'DISPATCHING' AND dispatch_attempt_at < ${threshold}))
         RETURNING *;
       `);
 
@@ -3586,6 +3649,33 @@ export class DatabaseService {
     } catch (err: any) {
       console.error('[dbService] markOpportunityDispatching failed closed:', err?.message || err);
       throw err;
+    }
+  }
+
+  async setOpportunityStaleForTest(id: string, staleAttemptId: string, staleTime: string, email: string): Promise<void> {
+    if (this.useInMemoryScoutStore) {
+      const opp = this.inMemoryOpportunities.get(id);
+      if (opp) {
+        opp.outreachStatus = 'DISPATCHING';
+        opp.dispatchAttemptId = staleAttemptId;
+        opp.dispatchAttemptAt = staleTime;
+        opp.recipientEmail = email;
+      }
+      return;
+    }
+
+    try {
+      await db.execute(sql`
+        UPDATE opportunities
+        SET outreach_status = 'DISPATCHING',
+            dispatch_attempt_id = ${staleAttemptId},
+            dispatch_attempt_at = ${staleTime},
+            recipient_email = ${email},
+            updated_at = NOW()
+        WHERE id = ${id}
+      `);
+    } catch (err: any) {
+      console.error('[dbService] setOpportunityStaleForTest failed:', err);
     }
   }
 

@@ -236,6 +236,9 @@ export class EmailOutreachDispatcher {
       };
     }
 
+    let isRetry = false;
+    let savedAttemptId: string | undefined = undefined;
+
     if ((opp.outreachStatus as string) === 'DISPATCHING') {
       const lockAge = opp.dispatchAttemptAt ? Date.now() - new Date(opp.dispatchAttemptAt).getTime() : 0;
       // If dispatch started less than 30 seconds ago, reject duplicate trigger
@@ -246,6 +249,29 @@ export class EmailOutreachDispatcher {
           inProgress: true,
           error: 'Dispatch is currently in progress for this prospect. Please wait.',
         };
+      } else {
+        // Lock has expired. Apply recovery policy.
+        console.warn(`[Dispatcher] Found ambiguous DISPATCHING state with expired lock for opportunity ${opportunityId}.`);
+        const providerConfig = await this.getProviderConfig();
+        const activeProvider = providerConfig.activeProvider;
+
+        if (activeProvider === 'resend') {
+          console.log(`[Dispatcher] Recovery: Resend is active. Proceeding with safe idempotent retry using key: ${opp.dispatchAttemptId}`);
+          isRetry = true;
+          savedAttemptId = opp.dispatchAttemptId;
+          // Temporarily set to APPROVED in-memory so it passes the transition check
+          opp.outreachStatus = 'APPROVED';
+        } else {
+          console.error(`[Dispatcher] Recovery: Gmail SMTP is active and does not support idempotency. Failing closed to prevent duplicate send.`);
+          const errorMsg = 'Ambiguous DISPATCHING state: The previous send attempt timed out or the process crashed. Failed closed to prevent duplicate email delivery via Gmail SMTP.';
+          await dbService.markOpportunitySendFailed(opp.id, errorMsg, opp.recipientEmail);
+          return {
+            success: false,
+            provider: 'gmail',
+            recipientEmail: opp.recipientEmail,
+            error: errorMsg,
+          };
+        }
       }
     }
 
@@ -278,17 +304,17 @@ export class EmailOutreachDispatcher {
     const { recipientEmail, draft, subject } = validation;
 
     // 3. Transition into DISPATCHING atomically to acquire the exclusive lock
-    const dispatchAttemptId = `disp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    await dbService.markOpportunityDispatching(opportunityId, dispatchAttemptId, recipientEmail);
+    const dispatchAttemptId = isRetry && savedAttemptId ? savedAttemptId : `disp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const updatedOpp = await dbService.markOpportunityDispatching(opportunityId, dispatchAttemptId, recipientEmail);
 
     const providerConfig = await this.getProviderConfig();
     const activeProvider = providerConfig.activeProvider;
 
     // 4. Execute Dispatch via Active Provider
     if (activeProvider === 'gmail') {
-      return this.dispatchViaGmail(opp, recipientEmail, subject, draft, providerConfig);
+      return this.dispatchViaGmail(updatedOpp, recipientEmail, subject, draft, providerConfig);
     } else {
-      return this.dispatchViaResend(opp, recipientEmail, subject, draft, providerConfig);
+      return this.dispatchViaResend(updatedOpp, recipientEmail, subject, draft, providerConfig);
     }
   }
 
@@ -417,6 +443,7 @@ export class EmailOutreachDispatcher {
         headers: {
           Authorization: `Bearer ${config.resend.apiKey}`,
           'Content-Type': 'application/json',
+          'X-Idempotency-Key': opp.dispatchAttemptId || `resend_${opp.id}_${Date.now()}`,
         },
         body: JSON.stringify({
           from: config.resend.fromEmail,

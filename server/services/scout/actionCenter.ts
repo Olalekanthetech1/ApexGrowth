@@ -124,36 +124,35 @@ export class ActionCenter {
     };
 
     const entFingerprint = intelligenceEngine.calculateEntityFingerprint(prospectName, businessName, cleanUrl);
-    const existingEntity = await dbService.getOpportunityByEntityFingerprint(entFingerprint);
+    const oppFingerprint = intelligenceEngine.calculateOpportunityFingerprint(candidate.sourcePlatform, candidate.sourceUrl);
 
     const opportunity = await intelligenceEngine.analyzeAndVerify(candidate);
+
     let saved: Opportunity;
-
-    if (existingEntity) {
-      console.log(`[ActionCenter] Manual audit matched existing entity fingerprint: ${entFingerprint}. Merging.`);
-      saved = await dbService.mergeOpportunitySignal(
-        existingEntity.id,
+    try {
+      const result = await dbService.saveOpportunityAndSignalAtomically(
+        opportunity,
         candidate,
-        opportunity.evidence,
-        opportunity.publicContacts,
-        opportunity.verificationStatus,
-        opportunity.confidenceScores,
-        opportunity.isVerifiedOpportunity
+        oppFingerprint,
+        entFingerprint
       );
-    } else {
-      saved = await dbService.createOpportunity(opportunity);
+      saved = result.saved;
+    } catch (saveErr: any) {
+      if (saveErr?.message === 'DUPLICATE_SIGNAL') {
+        const sig = await dbService.getOpportunitySignalByFingerprint(oppFingerprint);
+        if (sig && sig.opportunityId) {
+          const opp = await dbService.getOpportunityById(sig.opportunityId);
+          if (opp) {
+            return opp;
+          }
+        }
+        const oppByFp = await dbService.getOpportunityByOpportunityFingerprint(oppFingerprint);
+        if (oppByFp) {
+          return oppByFp;
+        }
+      }
+      throw saveErr;
     }
-
-    // Always register the manual audit source signal
-    const oppFingerprint = intelligenceEngine.calculateOpportunityFingerprint(candidate.sourcePlatform, candidate.sourceUrl);
-    await dbService.createOpportunitySignal({
-      id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      opportunityId: saved.id,
-      sourcePlatform: candidate.sourcePlatform,
-      sourceUrl: candidate.sourceUrl,
-      sourceFingerprint: oppFingerprint,
-      rawExcerpt: candidate.sourcePostExcerpt || undefined,
-    });
 
     return saved;
   }
