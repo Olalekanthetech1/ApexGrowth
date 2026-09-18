@@ -435,6 +435,16 @@ export interface Opportunity {
   updatedAt: string;
 }
 
+export interface OpportunitySignal {
+  id: string;
+  opportunityId: string;
+  sourcePlatform: string;
+  sourceUrl: string;
+  sourceFingerprint: string;
+  observedAt: string;
+  rawExcerpt?: string;
+}
+
 export interface ScoutSettings {
   id: string;
   telegramBotToken?: string;

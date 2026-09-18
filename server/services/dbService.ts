@@ -2354,6 +2354,7 @@ export class DatabaseService {
   private scoutTablesChecked = false;
   private useInMemoryScoutStore = false;
   private inMemoryOpportunities = new Map<string, Opportunity>();
+  private inMemoryOpportunitySignals = new Map<string, any>();
   private inMemoryScoutSettings: ScoutSettings = {
     id: 'scout_settings_primary',
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
@@ -2384,6 +2385,8 @@ export class DatabaseService {
       await db.execute(sql`
         CREATE TABLE IF NOT EXISTS opportunities (
           id TEXT PRIMARY KEY,
+          opportunity_fingerprint TEXT,
+          entity_fingerprint TEXT,
           title TEXT NOT NULL,
           prospect_name TEXT NOT NULL,
           business_name TEXT NOT NULL,
@@ -2395,6 +2398,9 @@ export class DatabaseService {
           relevance_summary TEXT NOT NULL,
           evidence JSONB NOT NULL DEFAULT '[]',
           public_contacts JSONB NOT NULL DEFAULT '[]',
+          confidence_scores JSONB,
+          verification_status JSONB,
+          is_verified_opportunity BOOLEAN NOT NULL DEFAULT FALSE,
           opportunity_score TEXT NOT NULL DEFAULT 'MEDIUM',
           outreach_status TEXT NOT NULL DEFAULT 'DRAFTED',
           outreach_draft TEXT NOT NULL,
@@ -2469,6 +2475,12 @@ export class DatabaseService {
         ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS smtp_host TEXT;
         ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS smtp_port INTEGER DEFAULT 465;
 
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS opportunity_fingerprint TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS entity_fingerprint TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS confidence_scores JSONB;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS verification_status JSONB;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS is_verified_opportunity BOOLEAN NOT NULL DEFAULT FALSE;
+
         ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS sent_channel TEXT;
         ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS sent_provider TEXT;
         ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS outreach_message_id TEXT;
@@ -2482,10 +2494,43 @@ export class DatabaseService {
         ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS prospect_reply TEXT;
         ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS prospect_replied_at TIMESTAMPTZ;
         ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS deal_id TEXT;
+      `).catch((err) => {
+        console.error('[DB MIGRATION] ALTER TABLE opportunities/scout_settings error:', err);
+      });
+
+      // Safely perform NULL backfill for verification flags
+      await db.execute(sql`
+        UPDATE opportunities SET is_verified_opportunity = FALSE WHERE is_verified_opportunity IS NULL;
       `).catch(() => {});
+
+      // Create unique index for entity fingerprint
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS opportunities_entity_fingerprint_idx ON opportunities (entity_fingerprint) WHERE entity_fingerprint IS NOT NULL;
+      `).catch(() => {});
+
+      // Create opportunity_signals table with DB-level uniqueness constraint for transactional deduplication
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS opportunity_signals (
+          id TEXT PRIMARY KEY,
+          opportunity_id TEXT NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
+          source_platform TEXT NOT NULL,
+          source_url TEXT NOT NULL,
+          source_fingerprint TEXT UNIQUE NOT NULL,
+          observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          raw_excerpt TEXT
+        );
+      `).catch((err) => {
+        console.error('[DB MIGRATION] CREATE TABLE opportunity_signals error:', err);
+      });
+
+      await db.execute(sql`
+        CREATE INDEX IF NOT EXISTS opportunity_signals_opp_id_idx ON opportunity_signals (opportunity_id);
+      `).catch(() => {});
+
       this.scoutTablesChecked = true;
       this.useInMemoryScoutStore = false;
-    } catch {
+    } catch (err: any) {
+      console.error('[ensureScoutTablesExist] DB setup failure, using in-memory store:', err?.message || err);
       this.scoutTablesChecked = true;
       this.useInMemoryScoutStore = true;
     }
@@ -3082,6 +3127,101 @@ export class DatabaseService {
         .where(eq(schema.opportunities.id, id));
     } catch {
       this.inMemoryOpportunities.set(id, opp);
+    }
+  }
+
+  async createOpportunitySignal(signal: {
+    id: string;
+    opportunityId: string;
+    sourcePlatform: string;
+    sourceUrl: string;
+    sourceFingerprint: string;
+    rawExcerpt?: string;
+  }): Promise<void> {
+    await this.ensureScoutTablesExist();
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunitySignals.set(signal.sourceFingerprint, {
+        ...signal,
+        observedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    try {
+      await db.insert(schema.opportunitySignals).values({
+        id: signal.id,
+        opportunityId: signal.opportunityId,
+        sourcePlatform: signal.sourcePlatform,
+        sourceUrl: signal.sourceUrl,
+        sourceFingerprint: signal.sourceFingerprint,
+        rawExcerpt: signal.rawExcerpt || null,
+      });
+    } catch (err: any) {
+      console.error('[dbService] createOpportunitySignal DB error, falling back to memory:', err?.message || err);
+      this.inMemoryOpportunitySignals.set(signal.sourceFingerprint, {
+        ...signal,
+        observedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  async getOpportunitySignalByFingerprint(fingerprint: string): Promise<any | null> {
+    await this.ensureScoutTablesExist();
+    if (this.useInMemoryScoutStore) {
+      return this.inMemoryOpportunitySignals.get(fingerprint) || null;
+    }
+
+    try {
+      const rows = await db
+        .select()
+        .from(schema.opportunitySignals)
+        .where(eq(schema.opportunitySignals.sourceFingerprint, fingerprint))
+        .limit(1);
+      if (rows.length === 0) return null;
+      return {
+        id: rows[0].id,
+        opportunityId: rows[0].opportunityId,
+        sourcePlatform: rows[0].sourcePlatform,
+        sourceUrl: rows[0].sourceUrl,
+        sourceFingerprint: rows[0].sourceFingerprint,
+        observedAt: rows[0].observedAt.toISOString(),
+        rawExcerpt: rows[0].rawExcerpt || undefined,
+      };
+    } catch {
+      return this.inMemoryOpportunitySignals.get(fingerprint) || null;
+    }
+  }
+
+  async getOpportunitySignalsByOpportunityId(opportunityId: string): Promise<any[]> {
+    await this.ensureScoutTablesExist();
+    if (this.useInMemoryScoutStore) {
+      const list = [];
+      for (const sig of this.inMemoryOpportunitySignals.values()) {
+        if (sig.opportunityId === opportunityId) list.push(sig);
+      }
+      return list;
+    }
+
+    try {
+      const rows = await db
+        .select()
+        .from(schema.opportunitySignals)
+        .where(eq(schema.opportunitySignals.opportunityId, opportunityId));
+      return rows.map((r) => ({
+        id: r.id,
+        opportunityId: r.opportunityId,
+        sourcePlatform: r.sourcePlatform,
+        sourceUrl: r.sourceUrl,
+        sourceFingerprint: r.sourceFingerprint,
+        observedAt: r.observedAt.toISOString(),
+        rawExcerpt: r.rawExcerpt || undefined,
+      }));
+    } catch {
+      const list = [];
+      for (const sig of this.inMemoryOpportunitySignals.values()) {
+        if (sig.opportunityId === opportunityId) list.push(sig);
+      }
+      return list;
     }
   }
 

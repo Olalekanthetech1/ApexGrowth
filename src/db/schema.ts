@@ -504,6 +504,27 @@ export const opportunities = pgTable(
     index('opportunities_score_idx').on(table.opportunityScore),
     index('opportunities_created_at_idx').on(table.createdAt),
     index('opportunities_source_url_idx').on(table.sourceUrl),
+    uniqueIndex('opportunities_entity_fingerprint_idx').on(table.entityFingerprint),
+  ]
+);
+
+// 19b. Opportunity Signals Table (For Source Deduplication and signal history)
+export const opportunitySignals = pgTable(
+  'opportunity_signals',
+  {
+    id: text('id').primaryKey(),
+    opportunityId: text('opportunity_id')
+      .references(() => opportunities.id, { onDelete: 'cascade' })
+      .notNull(),
+    sourcePlatform: text('source_platform').notNull(),
+    sourceUrl: text('source_url').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    observedAt: timestamp('observed_at', { withTimezone: true }).defaultNow().notNull(),
+    rawExcerpt: text('raw_excerpt'),
+  },
+  (table) => [
+    uniqueIndex('opportunity_signals_fingerprint_idx').on(table.sourceFingerprint),
+    index('opportunity_signals_opp_id_idx').on(table.opportunityId),
   ]
 );
 

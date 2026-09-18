@@ -225,7 +225,7 @@ export class EmailOutreachDispatcher {
     }
 
     // 1. Idempotency & Duplicate Send Protection
-    if (opp.outreachStatus === 'SENT') {
+    if ((opp.outreachStatus as string) === 'SENT') {
       return {
         success: false,
         provider: (opp.sentProvider as any) || 'gmail',
@@ -236,7 +236,7 @@ export class EmailOutreachDispatcher {
       };
     }
 
-    if (opp.outreachStatus === 'DISPATCHING') {
+    if ((opp.outreachStatus as string) === 'DISPATCHING') {
       const lockAge = opp.dispatchAttemptAt ? Date.now() - new Date(opp.dispatchAttemptAt).getTime() : 0;
       // If dispatch started less than 30 seconds ago, reject duplicate trigger
       if (lockAge < 30000) {
@@ -247,6 +247,15 @@ export class EmailOutreachDispatcher {
           error: 'Dispatch is currently in progress for this prospect. Please wait.',
         };
       }
+    }
+
+    // STRICT ENFORCEMENT: require APPROVED status before dispatcher execution
+    if ((opp.outreachStatus as string) !== 'APPROVED') {
+      return {
+        success: false,
+        provider: 'gmail',
+        error: `STRICT STATE BLOCKED: Opportunity #${opportunityId} is in status '${opp.outreachStatus}', but must be explicitly APPROVED by an operator before dispatching.`,
+      };
     }
 
     // 2. Pre-Send Validation

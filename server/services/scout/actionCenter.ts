@@ -30,9 +30,10 @@ export class ActionCenter {
         const oppFingerprint = intelligenceEngine.calculateOpportunityFingerprint(candidate.sourcePlatform, candidate.sourceUrl);
         const entFingerprint = intelligenceEngine.calculateEntityFingerprint(candidate.prospectName, candidate.businessName, candidate.websiteUrl);
 
-        // 1. Direct Signal Deduplication (Source-level)
-        const existingSignal = await dbService.getOpportunityByOpportunityFingerprint(oppFingerprint);
-        if (existingSignal) {
+        // 1. Direct Signal Deduplication (Source-level) via separate signals table & opportunity_fingerprint column
+        const existingSignal = await dbService.getOpportunitySignalByFingerprint(oppFingerprint);
+        const existingOppByFingerprint = await dbService.getOpportunityByOpportunityFingerprint(oppFingerprint);
+        if (existingSignal || existingOppByFingerprint) {
           console.log(`[ActionCenter] Skipping direct duplicate signal for fingerprint: ${oppFingerprint}`);
           continue;
         }
@@ -62,6 +63,16 @@ export class ActionCenter {
           saved = await dbService.createOpportunity(opportunity);
           opportunitiesCreated++;
         }
+
+        // Always register the signal record for proper source-level retention & future deduplication
+        await dbService.createOpportunitySignal({
+          id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          opportunityId: saved.id,
+          sourcePlatform: candidate.sourcePlatform,
+          sourceUrl: candidate.sourceUrl,
+          sourceFingerprint: oppFingerprint,
+          rawExcerpt: candidate.sourcePostExcerpt || undefined,
+        });
 
         // 4. Dispatch alert to Telegram
         const token = settings.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
@@ -155,6 +166,17 @@ export class ActionCenter {
       saved = await dbService.createOpportunity(opportunity);
     }
 
+    // Always register the manual audit source signal
+    const oppFingerprint = intelligenceEngine.calculateOpportunityFingerprint(candidate.sourcePlatform, candidate.sourceUrl);
+    await dbService.createOpportunitySignal({
+      id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      opportunityId: saved.id,
+      sourcePlatform: candidate.sourcePlatform,
+      sourceUrl: candidate.sourceUrl,
+      sourceFingerprint: oppFingerprint,
+      rawExcerpt: candidate.sourcePostExcerpt || undefined,
+    });
+
     return saved;
   }
 
@@ -163,6 +185,13 @@ export class ActionCenter {
    * Notice: Human-in-the-loop approval boundary — approves the draft, does NOT auto-send.
    */
   public async approveOpportunity(id: string): Promise<Opportunity> {
+    const opp = await dbService.getOpportunityById(id);
+    if (!opp) {
+      throw new Error(`Opportunity #${id} not found`);
+    }
+    if (!opp.isVerifiedOpportunity) {
+      throw new Error(`STRICT GATE BLOCKED: Opportunity #${id} did not pass the Lead Intelligence Gate and cannot be approved.`);
+    }
     return dbService.updateOpportunityStatus(id, 'APPROVED');
   }
 

@@ -704,6 +704,22 @@ export class TelegramScoutService {
             // Quick user feedback on Telegram
             await this.answerCallbackQuery(token, cb.id, '⚡ Dispatching approved outreach...');
 
+            // FIRST: Transition status to APPROVED (which performs the Lead Intelligence Gate checks)
+            try {
+              const { actionCenter } = await import('./actionCenter.js');
+              await actionCenter.approveOpportunity(oppId);
+            } catch (err: any) {
+              await this.answerCallbackQuery(token, cb.id, '❌ Approval Gate Blocked');
+              if (chatId) {
+                await this.sendMessage(
+                  token,
+                  chatId,
+                  `⚠️ <b>Outreach Dispatch Blocked</b>\n\nOpportunity #${oppId} did not pass the Intelligence Gate: ${err?.message || err}`
+                );
+              }
+              return { handled: true };
+            }
+
             // Dispatch using provider abstraction (Gmail SMTP / Resend) with idempotency lock
             const { emailOutreachDispatcher } = await import('./emailOutreachDispatcher.js');
             const result = await emailOutreachDispatcher.dispatchOutreach(oppId);
