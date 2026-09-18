@@ -106,38 +106,54 @@ export class IntelligenceEngine {
     contacts: PublicContact[]
   ) {
     // 1. Identity Resolution (PROSPECT_STATED / IDENTITY_RESOLVED)
-    // Non-placeholder name and not anonymous
+    // Non-placeholder name, not a generic handle, properly cased, and not anonymous
     const isNameResolved = this.isIdentityResolved(candidate.prospectName);
     const isPlatformAcc = this.checkIfPlatformAccount(candidate);
     const identityResolved = isNameResolved && !isPlatformAcc;
 
     // 2. Company/Domain Verification (AUDIT_OBSERVED)
-    // Needs valid website url and a non-placeholder company name
+    // Needs valid website url, a non-placeholder company name, and corroborative proof
     const hasWebsite = !!candidate.websiteUrl;
-    const isCompanyResolved = candidate.businessName && candidate.businessName !== 'E-commerce Brand' && candidate.businessName !== 'Prospective Brand' && candidate.businessName !== 'Founder\'s Venture' && candidate.businessName !== 'Your Store';
+    const isCompanyResolved = candidate.businessName && 
+      candidate.businessName !== 'E-commerce Brand' && 
+      candidate.businessName !== 'Prospective Brand' && 
+      candidate.businessName !== 'Founder\'s Venture' && 
+      candidate.businessName !== 'Your Store';
     const auditPerformed = audit !== null && !audit.fetchError;
-    const companyVerified = hasWebsite && !!isCompanyResolved && auditPerformed;
+
+    // Deep corroboration: Verify business name/prospect name ↔ website HTML contents or domain string matching
+    const isCorroborated = hasWebsite && isCompanyResolved && 
+      this.corroborateCompanyDomain(candidate.businessName, candidate.websiteUrl, audit?.metaDescription || audit?.title);
+    
+    const companyVerified = hasWebsite && !!isCompanyResolved && auditPerformed && isCorroborated;
 
     // 3. Contact Available (CONTACT_VERIFIED)
-    // High or Medium confidence contact info exists
+    // ONLY count email, phone, IG, etc., if confidence is >= MEDIUM
     const contactAvailable = contacts.length > 0 && contacts.some(
-      (c) => c.value && (c.type === 'email' || c.type === 'phone' || c.type === 'instagram' || c.type === 'whatsapp' || c.type === 'twitter')
+      (c) => c.value && 
+        (c.confidence === 'HIGH' || c.confidence === 'MEDIUM') &&
+        (c.type === 'email' || c.type === 'phone' || c.type === 'instagram' || c.type === 'whatsapp' || c.type === 'twitter')
     );
 
     // 4. Problem Explicit (PROSPECT_STATED)
-    // Explicit growth or conversion drop-off pain points mentioned by prospect
-    const hasDetectedPainPoints = candidate.detectedPainPoints && candidate.detectedPainPoints.length > 0;
+    // Explicit growth or conversion drop-off pain points mentioned by prospect, ignoring loose general terms
     const excerptLower = (candidate.sourcePostExcerpt || '').toLowerCase();
-    const explicitKeywords = ['checkout', 'conversion', 'cart', 'sales', 'bounce', 'speed', 'drop', 'friction', 'visitor', 'customer', 'stripe', 'shopify', 'ad', 'marketing'];
-    const textHasProblem = explicitKeywords.some((kw) => excerptLower.includes(kw));
-    const problemExplicit = hasDetectedPainPoints && textHasProblem;
+    const strongStatedPhrases = [
+      'low conversion', 'dropoff', 'drop-off', 'bounce rate', 'abandoned cart',
+      'not converting', 'zero sales', 'no sales', 'losing money', 'checkout issue',
+      'cart abandonment', 'slow checkout', 'high bounce', 'lose customers',
+      'poor conversion', 'improve conversion', 'optimization help', 'cannot convert',
+      'struggling with sales', 'struggling to sell', 'low traffic'
+    ];
+    const problemExplicit = strongStatedPhrases.some(phrase => excerptLower.includes(phrase)) ||
+                            (candidate.detectedPainPoints || []).some(p => strongStatedPhrases.some(phrase => p.toLowerCase().includes(phrase)));
 
-    // 5. Confidence Score Math
+    // 5. Confidence Score Math (Standardized to 0 - 100)
     const confidenceScores = {
-      identity: identityResolved ? 1.0 : (candidate.prospectName && candidate.prospectName !== 'Founder' ? 0.5 : 0.1),
-      company: companyVerified ? 1.0 : (hasWebsite ? 0.4 : 0.1),
-      contact: contactAvailable ? 1.0 : (contacts.some(c => c.type === 'reddit') ? 0.3 : 0.0),
-      problem: problemExplicit ? 1.0 : (hasDetectedPainPoints ? 0.6 : 0.1),
+      identity: identityResolved ? 100 : (candidate.prospectName && candidate.prospectName !== 'Founder' ? 50 : 10),
+      company: companyVerified ? 100 : (hasWebsite ? 40 : 10),
+      contact: contactAvailable ? 100 : (contacts.some(c => c.type === 'reddit') ? 30 : 0),
+      problem: problemExplicit ? 100 : ((candidate.detectedPainPoints || []).length > 0 ? 60 : 10),
     };
 
     // Overall Verification status
@@ -147,10 +163,10 @@ export class IntelligenceEngine {
       contactAvailable,
       problemExplicit,
       auditPerformed,
-      isDeduplicated: true, // evaluated dynamically
+      isDeduplicated: true, // evaluated dynamically at persistence layer
     };
 
-    // Strict rule: must satisfy the core pillars to be a verified opportunity
+    // Strict rule: must satisfy ALL core pillars to pass the intelligence gate and be a verified opportunity
     const isVerifiedOpportunity = identityResolved && companyVerified && contactAvailable && problemExplicit;
 
     return {
@@ -371,6 +387,35 @@ export class IntelligenceEngine {
       }
     }
 
+    // Capture explicit, prospect-stated growth or conversion drop-off evidence from post text
+    const excerptLower = (candidate.sourcePostExcerpt || '').toLowerCase();
+    const strongStatedPhrases = [
+      'low conversion', 'dropoff', 'drop-off', 'bounce rate', 'abandoned cart',
+      'not converting', 'zero sales', 'no sales', 'losing money', 'checkout issue',
+      'cart abandonment', 'slow checkout', 'high bounce', 'lose customers',
+      'poor conversion', 'improve conversion', 'optimization help', 'cannot convert',
+      'struggling with sales', 'struggling to sell', 'low traffic'
+    ];
+    const matchedPhrase = strongStatedPhrases.find(phrase => excerptLower.includes(phrase));
+    let evidenceQuote = '';
+    if (matchedPhrase) {
+      const sentences = (candidate.sourcePostExcerpt || '').split(/[.!?]+/);
+      const matchedSentence = sentences.find(s => s.toLowerCase().includes(matchedPhrase));
+      if (matchedSentence) {
+        evidenceQuote = matchedSentence.trim();
+      }
+    }
+
+    if (matchedPhrase || (candidate.detectedPainPoints || []).some(p => strongStatedPhrases.some(phrase => p.toLowerCase().includes(phrase)))) {
+      observations.push({
+        category: 'prospect_stated',
+        observation: `Prospect explicitly stated friction point: "${evidenceQuote || 'Conversion pain points specified in post'}"`,
+        potentialImpact: 'High-intent conversion-blocker identified and stated directly by the founder.',
+        sourceOrMethod: `Prospect public post: ${candidate.sourceUrl}`,
+        verified: true,
+      });
+    }
+
     return observations;
   }
 
@@ -551,9 +596,45 @@ MANDATORY RULES:
 
   private isIdentityResolved(name: string): boolean {
     if (!name) return false;
-    const genericNames = ['founder', 'community founder', 'store owner', 'e-commerce owner', 'admin', 'user', 'prospect'];
+    const genericNames = ['founder', 'community founder', 'store owner', 'e-commerce owner', 'admin', 'user', 'prospect', 'member', 'redditor', 'anonymous'];
     const lower = name.toLowerCase();
-    return !genericNames.some((g) => lower.includes(g)) && name.length > 2;
+    if (genericNames.some((g) => lower.includes(g)) || name.length <= 2) {
+      return false;
+    }
+    // Reject handle strings (forum accounts starting with @, u/, r/, or containing numeric suffixes typical of auto-gen handles)
+    if (name.startsWith('@') || name.startsWith('u/') || name.startsWith('r/')) {
+      return false;
+    }
+    if (/\d/.test(name) && !lower.includes('2nd') && !lower.includes('3rd')) {
+      return false;
+    }
+    // Fully resolved names should have space separation (first name + last name) and use capitalization
+    const hasSpace = name.trim().includes(' ');
+    const isWellCased = /[A-Z]/.test(name);
+    return hasSpace && isWellCased;
+  }
+
+  private corroborateCompanyDomain(businessName: string, websiteUrl?: string, websiteMetaText?: string): boolean {
+    if (!websiteUrl || !businessName) return false;
+    let domain = '';
+    try {
+      domain = new URL(websiteUrl).hostname.replace(/^www\./i, '').toLowerCase().trim();
+    } catch {
+      domain = websiteUrl.toLowerCase().trim();
+    }
+    const cleanBiz = businessName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanDomain = domain.replace(/[^a-z0-9]/g, '');
+
+    // Corroborate via string overlap
+    const matchesDomain = cleanDomain.includes(cleanBiz) || cleanBiz.includes(cleanDomain);
+
+    // Corroborate via site metadata references
+    let matchesMeta = false;
+    if (websiteMetaText) {
+      matchesMeta = websiteMetaText.toLowerCase().includes(businessName.toLowerCase());
+    }
+
+    return matchesDomain || matchesMeta;
   }
 
   private checkIfPlatformAccount(candidate: RawOpportunityCandidate): boolean {

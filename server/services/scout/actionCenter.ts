@@ -30,49 +30,27 @@ export class ActionCenter {
         const oppFingerprint = intelligenceEngine.calculateOpportunityFingerprint(candidate.sourcePlatform, candidate.sourceUrl);
         const entFingerprint = intelligenceEngine.calculateEntityFingerprint(candidate.prospectName, candidate.businessName, candidate.websiteUrl);
 
-        // 1. Direct Signal Deduplication (Source-level) via separate signals table & opportunity_fingerprint column
-        const existingSignal = await dbService.getOpportunitySignalByFingerprint(oppFingerprint);
-        const existingOppByFingerprint = await dbService.getOpportunityByOpportunityFingerprint(oppFingerprint);
-        if (existingSignal || existingOppByFingerprint) {
-          console.log(`[ActionCenter] Skipping direct duplicate signal for fingerprint: ${oppFingerprint}`);
-          continue;
-        }
-
-        // 2. Entity Deduplication (Entity-level)
-        const existingEntity = await dbService.getOpportunityByEntityFingerprint(entFingerprint);
-
-        // 3. Process signal and calculate stats/observations
+        // Process signal and calculate stats/observations
         const opportunity = await intelligenceEngine.analyzeAndVerify(candidate);
 
-        let saved: Opportunity;
-
-        if (existingEntity) {
-          console.log(`[ActionCenter] Entity duplicate found for ${candidate.businessName} (${entFingerprint}). Merging signals.`);
-          saved = await dbService.mergeOpportunitySignal(
-            existingEntity.id,
-            candidate,
-            opportunity.evidence,
-            opportunity.publicContacts,
-            opportunity.verificationStatus,
-            opportunity.confidenceScores,
-            opportunity.isVerifiedOpportunity
-          );
-          opportunitiesMerged++;
-        } else {
-          // Store new unique entity
-          saved = await dbService.createOpportunity(opportunity);
-          opportunitiesCreated++;
+        // Save atomically (handles duplicate signal verification and entity matching/merging in a single database transaction block)
+        let atomicResult;
+        try {
+          atomicResult = await dbService.saveOpportunityAndSignalAtomically(opportunity, candidate, oppFingerprint, entFingerprint);
+        } catch (saveErr: any) {
+          if (saveErr?.message === 'DUPLICATE_SIGNAL') {
+            console.log(`[ActionCenter] Skipping direct duplicate signal for fingerprint: ${oppFingerprint}`);
+            continue;
+          }
+          throw saveErr;
         }
 
-        // Always register the signal record for proper source-level retention & future deduplication
-        await dbService.createOpportunitySignal({
-          id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          opportunityId: saved.id,
-          sourcePlatform: candidate.sourcePlatform,
-          sourceUrl: candidate.sourceUrl,
-          sourceFingerprint: oppFingerprint,
-          rawExcerpt: candidate.sourcePostExcerpt || undefined,
-        });
+        const saved = atomicResult.saved;
+        if (atomicResult.merged) {
+          opportunitiesMerged++;
+        } else {
+          opportunitiesCreated++;
+        }
 
         // 4. Dispatch alert to Telegram
         const token = settings.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;

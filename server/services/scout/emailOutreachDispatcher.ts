@@ -277,9 +277,8 @@ export class EmailOutreachDispatcher {
 
     const { recipientEmail, draft, subject } = validation;
 
-    // 3. Mark state as APPROVED and transition into DISPATCHING
+    // 3. Transition into DISPATCHING atomically to acquire the exclusive lock
     const dispatchAttemptId = `disp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    await dbService.markOpportunityApproved(opportunityId);
     await dbService.markOpportunityDispatching(opportunityId, dispatchAttemptId, recipientEmail);
 
     const providerConfig = await this.getProviderConfig();

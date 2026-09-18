@@ -367,7 +367,7 @@ export interface EvidenceProvenance {
 }
 
 export interface EvidenceObservation {
-  category: 'ux_checkout' | 'mobile_performance' | 'copy_funnel' | 'public_intent';
+  category: 'ux_checkout' | 'mobile_performance' | 'copy_funnel' | 'public_intent' | 'prospect_stated';
   observation: string; // Objective factual statement, e.g. "Observed: checkout CTA requires scrolling"
   potentialImpact: string; // Measured impact, e.g. "Slower mobile experiences can contribute to checkout friction"
   sourceOrMethod: string; // e.g. "Website audit test", "Public community post"

@@ -2503,29 +2503,126 @@ export class DatabaseService {
         UPDATE opportunities SET is_verified_opportunity = FALSE WHERE is_verified_opportunity IS NULL;
       `).catch(() => {});
 
-      // Create unique index for entity fingerprint
-      await db.execute(sql`
-        CREATE UNIQUE INDEX IF NOT EXISTS opportunities_entity_fingerprint_idx ON opportunities (entity_fingerprint) WHERE entity_fingerprint IS NOT NULL;
-      `).catch(() => {});
-
-      // Create opportunity_signals table with DB-level uniqueness constraint for transactional deduplication
+      // Create opportunity_signals table base schema FIRST if not exists
       await db.execute(sql`
         CREATE TABLE IF NOT EXISTS opportunity_signals (
           id TEXT PRIMARY KEY,
           opportunity_id TEXT NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
           source_platform TEXT NOT NULL,
           source_url TEXT NOT NULL,
-          source_fingerprint TEXT UNIQUE NOT NULL,
+          source_fingerprint TEXT NOT NULL,
           observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           raw_excerpt TEXT
         );
-      `).catch((err) => {
-        console.error('[DB MIGRATION] CREATE TABLE opportunity_signals error:', err);
-      });
+      `);
+
+      // 1. Detect and resolve duplicate entity fingerprints in opportunities table before index creation
+      try {
+        const dupEntities = await db.execute(sql`
+          SELECT entity_fingerprint, array_agg(id) as ids
+          FROM opportunities
+          WHERE entity_fingerprint IS NOT NULL AND entity_fingerprint <> ''
+          GROUP BY entity_fingerprint
+          HAVING COUNT(*) > 1;
+        `);
+
+        if (dupEntities.rows && dupEntities.rows.length > 0) {
+          console.log(`[DB MIGRATION] Found ${dupEntities.rows.length} duplicate entity fingerprint groups. Reconciling...`);
+          for (const row of dupEntities.rows) {
+            const fingerprint = row.entity_fingerprint;
+            const ids = row.ids as string[];
+            const survivingId = ids[0];
+            const duplicateIds = ids.slice(1);
+
+            console.log(`[DB MIGRATION] Consolidating entity fingerprint '${fingerprint}'. Surviving: ${survivingId}, Deleting duplicates: ${duplicateIds.join(', ')}`);
+
+            // Re-map any signals from duplicate entities to the surviving entity
+            for (const dupId of duplicateIds) {
+              await db.execute(sql`
+                UPDATE opportunity_signals
+                SET opportunity_id = ${survivingId}
+                WHERE opportunity_id = ${dupId};
+              `).catch(() => {});
+            }
+
+            // Delete the duplicate opportunity rows
+            const inValues = duplicateIds.map(id => `'${id}'`).join(', ');
+            await db.execute(sql`
+              DELETE FROM opportunities
+              WHERE id IN (${sql.raw(inValues)});
+            `);
+          }
+        }
+      } catch (err: any) {
+        console.error('[DB MIGRATION] Error during entity duplicate reconciliation:', err?.message || err);
+      }
+
+      // 2. Detect and resolve duplicate source fingerprints in opportunity_signals table before unique constraint/index enforcement
+      try {
+        const dupSignals = await db.execute(sql`
+          SELECT source_fingerprint, array_agg(id) as ids
+          FROM opportunity_signals
+          WHERE source_fingerprint IS NOT NULL AND source_fingerprint <> ''
+          GROUP BY source_fingerprint
+          HAVING COUNT(*) > 1;
+        `);
+
+        if (dupSignals.rows && dupSignals.rows.length > 0) {
+          console.log(`[DB MIGRATION] Found ${dupSignals.rows.length} duplicate source signal groups. Reconciling...`);
+          for (const row of dupSignals.rows) {
+            const fingerprint = row.source_fingerprint;
+            const ids = row.ids as string[];
+            const duplicateIds = ids.slice(1);
+
+            console.log(`[DB MIGRATION] Deleting duplicate signal rows for fingerprint '${fingerprint}': ${duplicateIds.join(', ')}`);
+
+            const inValues = duplicateIds.map(id => `'${id}'`).join(', ');
+            await db.execute(sql`
+              DELETE FROM opportunity_signals
+              WHERE id IN (${sql.raw(inValues)});
+            `);
+          }
+        }
+      } catch (err: any) {
+        console.error('[DB MIGRATION] Error during source signal duplicate reconciliation:', err?.message || err);
+      }
+
+      // 3. Create Unique Indexes & Enforce constraints
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS opportunities_entity_fingerprint_idx ON opportunities (entity_fingerprint) WHERE entity_fingerprint IS NOT NULL;
+      `);
+
+      await db.execute(sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS opportunity_signals_source_fingerprint_idx ON opportunity_signals (source_fingerprint);
+      `);
 
       await db.execute(sql`
         CREATE INDEX IF NOT EXISTS opportunity_signals_opp_id_idx ON opportunity_signals (opportunity_id);
-      `).catch(() => {});
+      `);
+
+      // 4. Verify that BOTH unique indexes exist
+      let entityIndexVerified = false;
+      let signalIndexVerified = false;
+
+      const entityCheck = await db.execute(sql`
+        SELECT indexname FROM pg_indexes WHERE indexname = 'opportunities_entity_fingerprint_idx';
+      `);
+      if (entityCheck.rows && entityCheck.rows.length > 0) {
+        entityIndexVerified = true;
+      }
+
+      const signalCheck = await db.execute(sql`
+        SELECT indexname FROM pg_indexes WHERE indexname = 'opportunity_signals_source_fingerprint_idx';
+      `);
+      if (signalCheck.rows && signalCheck.rows.length > 0) {
+        signalIndexVerified = true;
+      }
+
+      if (!entityIndexVerified || !signalIndexVerified) {
+        throw new Error(`CRITICAL MIGRATION FAILURE: Unique index verification failed. Entity index exists: ${entityIndexVerified}, Signal index exists: ${signalIndexVerified}`);
+      }
+
+      console.log('[DB MIGRATION] All database unique indexes verified successfully.');
 
       this.scoutTablesChecked = true;
       this.useInMemoryScoutStore = false;
@@ -2758,6 +2855,167 @@ export class DatabaseService {
     return urls;
   }
 
+  async saveOpportunityAndSignalAtomically(
+    opportunity: Opportunity,
+    candidate: any,
+    oppFingerprint: string,
+    entFingerprint: string
+  ): Promise<{ saved: Opportunity; merged: boolean }> {
+    await this.ensureScoutTablesExist();
+
+    if (this.useInMemoryScoutStore) {
+      const existingSignal = this.inMemoryOpportunitySignals.get(oppFingerprint);
+      if (existingSignal) {
+        throw new Error('DUPLICATE_SIGNAL');
+      }
+
+      let existingId: string | null = null;
+      for (const o of this.inMemoryOpportunities.values()) {
+        if (o.entityFingerprint === entFingerprint) {
+          existingId = o.id;
+          break;
+        }
+      }
+
+      let saved: Opportunity;
+      let merged = false;
+      if (existingId) {
+        saved = await this.mergeOpportunitySignal(
+          existingId,
+          candidate,
+          opportunity.evidence,
+          opportunity.publicContacts,
+          opportunity.verificationStatus,
+          opportunity.confidenceScores,
+          opportunity.isVerifiedOpportunity
+        );
+        merged = true;
+      } else {
+        saved = await this.createOpportunity(opportunity);
+      }
+
+      this.inMemoryOpportunitySignals.set(oppFingerprint, {
+        id: `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        opportunityId: saved.id,
+        sourcePlatform: candidate.sourcePlatform,
+        sourceUrl: candidate.sourceUrl,
+        sourceFingerprint: oppFingerprint,
+        observedAt: new Date().toISOString(),
+        rawExcerpt: candidate.sourcePostExcerpt || undefined,
+      });
+
+      return { saved, merged };
+    }
+
+    return await db.transaction(async (tx) => {
+      const signalCheck = await tx.execute(sql`
+        SELECT id FROM opportunity_signals WHERE source_fingerprint = ${oppFingerprint} FOR UPDATE;
+      `);
+      if (signalCheck.rows && signalCheck.rows.length > 0) {
+        throw new Error('DUPLICATE_SIGNAL');
+      }
+
+      const mainOppCheck = await tx.execute(sql`
+        SELECT id FROM opportunities WHERE opportunity_fingerprint = ${oppFingerprint} FOR UPDATE;
+      `);
+      if (mainOppCheck.rows && mainOppCheck.rows.length > 0) {
+        throw new Error('DUPLICATE_SIGNAL');
+      }
+
+      const entityCheck = await tx.execute(sql`
+        SELECT id, evidence, public_contacts, confidence_scores, verification_status, is_verified_opportunity
+        FROM opportunities
+        WHERE entity_fingerprint = ${entFingerprint}
+        FOR UPDATE;
+      `);
+
+      let saved: Opportunity;
+      let merged = false;
+
+      if (entityCheck.rows && entityCheck.rows.length > 0) {
+        const existingId = entityCheck.rows[0].id as string;
+        const currentEvidence = (entityCheck.rows[0].evidence as any) || [];
+        const currentContacts = (entityCheck.rows[0].public_contacts as any) || [];
+        const currentScores = (entityCheck.rows[0].confidence_scores as any) || {};
+        const currentStatus = (entityCheck.rows[0].verification_status as any) || {};
+        const currentIsVerified = Boolean(entityCheck.rows[0].is_verified_opportunity);
+
+        const newEvidence = [...currentEvidence];
+        for (const e of opportunity.evidence) {
+          if (!newEvidence.some((ex) => ex.observation === e.observation)) {
+            newEvidence.push(e);
+          }
+        }
+
+        const newContacts = [...currentContacts];
+        for (const c of opportunity.publicContacts) {
+          if (!newContacts.some((cx) => cx.value === c.value && cx.type === c.type)) {
+            newContacts.push(c);
+          }
+        }
+
+        const resolvedIsVerified = currentIsVerified || opportunity.isVerifiedOpportunity;
+
+        const resolvedScores = {
+          identity: Math.max(currentScores.identity || 0, opportunity.confidenceScores?.identity || 0),
+          company: Math.max(currentScores.company || 0, opportunity.confidenceScores?.company || 0),
+          contact: Math.max(currentScores.contact || 0, opportunity.confidenceScores?.contact || 0),
+          problem: Math.max(currentScores.problem || 0, opportunity.confidenceScores?.problem || 0),
+        };
+
+        const resolvedStatus = {
+          identityResolved: currentStatus.identityResolved || opportunity.verificationStatus?.identityResolved,
+          companyVerified: currentStatus.companyVerified || opportunity.verificationStatus?.companyVerified,
+          contactAvailable: currentStatus.contactAvailable || opportunity.verificationStatus?.contactAvailable,
+          problemExplicit: currentStatus.problemExplicit || opportunity.verificationStatus?.problemExplicit,
+          auditPerformed: currentStatus.auditPerformed || opportunity.verificationStatus?.auditPerformed,
+          isDeduplicated: currentStatus.isDeduplicated || opportunity.verificationStatus?.isDeduplicated,
+        };
+
+        await tx.execute(sql`
+          UPDATE opportunities
+          SET evidence = ${JSON.stringify(newEvidence)},
+              public_contacts = ${JSON.stringify(newContacts)},
+              confidence_scores = ${JSON.stringify(resolvedScores)},
+              verification_status = ${JSON.stringify(resolvedStatus)},
+              is_verified_opportunity = ${resolvedIsVerified},
+              updated_at = NOW()
+          WHERE id = ${existingId};
+        `);
+
+        saved = (await this.getOpportunityById(existingId))!;
+        merged = true;
+      } else {
+        await tx.execute(sql`
+          INSERT INTO opportunities (
+            id, opportunity_fingerprint, entity_fingerprint, title, prospect_name, business_name, website_url,
+            niche, source_platform, source_url, source_post_excerpt, relevance_summary, evidence, public_contacts,
+            confidence_scores, verification_status, is_verified_opportunity, opportunity_score, outreach_status,
+            outreach_draft, refined_draft, refinement_feedback, telegram_message_id, created_at, updated_at
+          ) VALUES (
+            ${opportunity.id}, ${opportunity.opportunityFingerprint || null}, ${opportunity.entityFingerprint || null},
+            ${opportunity.title}, ${opportunity.prospectName}, ${opportunity.businessName}, ${opportunity.websiteUrl || null},
+            ${opportunity.niche}, ${opportunity.sourcePlatform}, ${opportunity.sourceUrl}, ${opportunity.sourcePostExcerpt || null},
+            ${opportunity.relevanceSummary}, ${JSON.stringify(opportunity.evidence)}, ${JSON.stringify(opportunity.publicContacts)},
+            ${JSON.stringify(opportunity.confidenceScores)}, ${JSON.stringify(opportunity.verificationStatus)},
+            ${opportunity.isVerifiedOpportunity}, ${opportunity.opportunityScore}, ${opportunity.outreachStatus},
+            ${opportunity.outreachDraft}, ${opportunity.refinedDraft || null}, ${opportunity.refinementFeedback || null},
+            ${opportunity.telegramMessageId || null}, NOW(), NOW()
+          );
+        `);
+        saved = opportunity;
+      }
+
+      const signalId = `sig_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      await tx.execute(sql`
+        INSERT INTO opportunity_signals (id, opportunity_id, source_platform, source_url, source_fingerprint, raw_excerpt)
+        VALUES (${signalId}, ${saved.id}, ${candidate.sourcePlatform}, ${candidate.sourceUrl}, ${oppFingerprint}, ${candidate.sourcePostExcerpt || null});
+      `);
+
+      return { saved, merged };
+    });
+  }
+
   async createOpportunity(opp: Opportunity): Promise<Opportunity> {
     await this.ensureScoutTablesExist();
 
@@ -2798,9 +3056,8 @@ export class DatabaseService {
       });
       return opp;
     } catch (err: any) {
-      console.error('[dbService] createOpportunity DB error, falling back to memory:', err?.message || err);
-      this.inMemoryOpportunities.set(opp.id, opp);
-      return opp;
+      console.error('[dbService] createOpportunity DB error, failing closed:', err?.message || err);
+      throw err; // STRICT: Fail closed for production!
     }
   }
 
@@ -3041,9 +3298,8 @@ export class DatabaseService {
         .where(eq(schema.opportunities.id, existingId));
       return opp;
     } catch (err: any) {
-      console.error('[dbService] mergeOpportunitySignal DB error, falling back to memory:', err?.message || err);
-      this.inMemoryOpportunities.set(existingId, opp);
-      return opp;
+      console.error('[dbService] mergeOpportunitySignal DB error, failing closed:', err?.message || err);
+      throw err; // STRICT: Fail closed for production!
     }
   }
 
@@ -3104,9 +3360,9 @@ export class DatabaseService {
         })
         .where(eq(schema.opportunities.id, id));
       return opp;
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
+    } catch (err: any) {
+      console.error('[dbService] updateOpportunityStatus DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3125,8 +3381,9 @@ export class DatabaseService {
         .update(schema.opportunities)
         .set({ telegramMessageId: messageId, updatedAt: new Date() })
         .where(eq(schema.opportunities.id, id));
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
+    } catch (err: any) {
+      console.error('[dbService] updateOpportunityTelegramMessageId DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3157,11 +3414,8 @@ export class DatabaseService {
         rawExcerpt: signal.rawExcerpt || null,
       });
     } catch (err: any) {
-      console.error('[dbService] createOpportunitySignal DB error, falling back to memory:', err?.message || err);
-      this.inMemoryOpportunitySignals.set(signal.sourceFingerprint, {
-        ...signal,
-        observedAt: new Date().toISOString(),
-      });
+      console.error('[dbService] createOpportunitySignal DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3255,9 +3509,9 @@ export class DatabaseService {
         })
         .where(eq(schema.opportunities.id, id));
       return opp;
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
+    } catch (err: any) {
+      console.error('[dbService] updateOpportunityRefinedDraft DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3285,9 +3539,9 @@ export class DatabaseService {
         })
         .where(eq(schema.opportunities.id, id));
       return opp;
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
+    } catch (err: any) {
+      console.error('[dbService] markOpportunityApproved DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3303,25 +3557,35 @@ export class DatabaseService {
     opp.updatedAt = now;
 
     if (this.useInMemoryScoutStore) {
+      const current = this.inMemoryOpportunities.get(id);
+      if (!current || current.outreachStatus !== 'APPROVED') {
+        throw new Error(`CONCURRENCY CONFLICT: Opportunity #${id} is not in APPROVED state (current: ${current?.outreachStatus}).`);
+      }
       this.inMemoryOpportunities.set(id, opp);
       return opp;
     }
 
     try {
-      await db
-        .update(schema.opportunities)
-        .set({
-          outreachStatus: 'DISPATCHING',
-          dispatchAttemptId: attemptId,
-          dispatchAttemptAt: new Date(now),
-          recipientEmail: opp.recipientEmail || null,
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.opportunities.id, id));
+      const result = await db.execute(sql`
+        UPDATE opportunities
+        SET outreach_status = 'DISPATCHING',
+            dispatch_attempt_id = ${attemptId},
+            dispatch_attempt_at = ${new Date(now)},
+            recipient_email = COALESCE(${recipientEmail || null}, recipient_email),
+            updated_at = NOW()
+        WHERE id = ${id}
+          AND outreach_status = 'APPROVED'
+        RETURNING *;
+      `);
+
+      if (!result.rows || result.rows.length === 0) {
+        throw new Error(`CONCURRENCY CONFLICT: Could not claim Opportunity #${id} for dispatching. It may already be dispatching or was not approved.`);
+      }
+
       return opp;
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
+    } catch (err: any) {
+      console.error('[dbService] markOpportunityDispatching failed closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3382,9 +3646,9 @@ export class DatabaseService {
         })
         .where(eq(schema.opportunities.id, id));
       return opp;
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
+    } catch (err: any) {
+      console.error('[dbService] markOpportunitySent DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3418,9 +3682,9 @@ export class DatabaseService {
         })
         .where(eq(schema.opportunities.id, id));
       return opp;
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
+    } catch (err: any) {
+      console.error('[dbService] markOpportunitySendFailed DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
@@ -3459,9 +3723,9 @@ export class DatabaseService {
         })
         .where(eq(schema.opportunities.id, id));
       return opp;
-    } catch {
-      this.inMemoryOpportunities.set(id, opp);
-      return opp;
+    } catch (err: any) {
+      console.error('[dbService] recordProspectReply DB error, failing closed:', err?.message || err);
+      throw err;
     }
   }
 
