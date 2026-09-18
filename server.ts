@@ -8,8 +8,10 @@ import { execSync } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 import { apiRouter } from './server/routes/api.js';
 import { dbService } from './server/services/dbService.js';
+import { backgroundScoutWorker } from './server/services/scout/backgroundWorker.js';
+import { telegramPollingService } from './server/services/scout/telegramPollingService.js';
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = 3000;
 
 async function startServer() {
   const app = express();
@@ -43,14 +45,17 @@ async function startServer() {
     });
   }
 
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({
+  // Health check endpoints for Cloud Run and container probes
+  const healthHandler = (_req: express.Request, res: express.Response) => {
+    res.status(200).json({
       status: 'ok',
       service: 'ApexGrowth Digital Full Production Server',
       timestamp: new Date().toISOString(),
     });
-  });
+  };
+  app.get('/api/health', healthHandler);
+  app.get('/healthz', healthHandler);
+  app.get('/health', healthHandler);
 
   // Dynamic SEO sitemap.xml endpoint
   app.get('/sitemap.xml', async (req, res) => {
@@ -122,6 +127,9 @@ Sitemap: ${baseUrl}/sitemap.xml`;
   // Mount primary API router
   app.use('/api', apiRouter);
 
+  // Serve static assets in public folder
+  app.use(express.static(path.resolve('public')));
+
   // Vite middleware for development or Static files for production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -137,25 +145,29 @@ Sitemap: ${baseUrl}/sitemap.xml`;
     });
   }
 
-  // Automatic schema sync on startup
-  try {
-    console.log('🔄 Syncing database schema with Drizzle-kit...');
-    execSync('npx drizzle-kit push --config=src/db/drizzle.config.ts', { stdio: 'inherit' });
-    console.log('✅ Schema synchronization completed successfully.');
-  } catch (err: any) {
-    console.warn('⚠️ Warning: Automatic schema sync failed, proceeding anyway:', err.message);
-  }
-
-  // Automatic admin account bootstrap
-  try {
-    await dbService.bootstrapInitialAdmin();
-    await dbService.bootstrapPaymentMethods();
-  } catch (err: any) {
-    console.error('❌ Failed to run initial administrator bootstrap:', err.message);
-  }
-
+  // Start HTTP listener immediately so dev server is responsive right away
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 ApexGrowth Digital Server active on http://0.0.0.0:${PORT}`);
+
+    // Asynchronous database bootstrap and schema synchronization
+    (async () => {
+      try {
+        if (process.env.DATABASE_URL || (process.env.SQL_HOST && process.env.SQL_DB_NAME)) {
+          console.log('🔄 Checking database initialization...');
+        }
+        await dbService.bootstrapInitialAdmin();
+        await dbService.bootstrapPaymentMethods();
+        console.log('✅ Admin and payment initialization completed.');
+
+        // Start 24/7 Autonomous Opportunity Scout worker
+        backgroundScoutWorker.start();
+
+        // Start Real-Time Telegram Polling Service for immediate two-way responsiveness
+        telegramPollingService.start();
+      } catch (err: any) {
+        console.warn('⚠️ Non-fatal database bootstrap notice:', err?.message || err);
+      }
+    })();
   });
 }
 

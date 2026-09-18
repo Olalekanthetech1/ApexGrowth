@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ApexGrowth Intelligence • Telegram Bot Assets Kit</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: #090d16;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      color: #f8fafc;
+      padding: 40px 20px;
+    }
+    .header {
+      text-align: center;
+      max-width: 640px;
+      margin-bottom: 36px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      color: #a5b4fc;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      letter-spacing: 0.5px;
+    }
+    h1 {
+      font-size: 28px;
+      margin: 0 0 10px 0;
+      color: #ffffff;
+      font-weight: 800;
+    }
+    p.subtitle {
+      color: #94a3b8;
+      font-size: 15px;
+      margin: 0;
+      line-height: 1.5;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 32px;
+      max-width: 900px;
+      width: 100%;
+    }
+    @media (min-width: 768px) {
+      .grid {
+        grid-template-columns: 360px 1fr;
+      }
+    }
+    .card {
+      background: #0f172a;
+      border-radius: 20px;
+      border: 1px solid #1e293b;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .card-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 0 4px 0;
+      color: #f1f5f9;
+    }
+    .card-desc {
+      font-size: 13px;
+      color: #94a3b8;
+      margin: 0 0 18px 0;
+    }
+    .preview-container {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #050811;
+      border-radius: 14px;
+      border: 1px solid #1e293b;
+      padding: 16px;
+      margin-bottom: 20px;
+      min-height: 240px;
+    }
+    .avatar-canvas {
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      box-shadow: 0 0 35px rgba(99, 102, 241, 0.4);
+    }
+    .banner-canvas {
+      width: 100%;
+      max-width: 440px;
+      height: auto;
+      aspect-ratio: 16 / 9;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      border: 1px solid #334155;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      width: 100%;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: #4f46e5;
+      color: white;
+      text-decoration: none;
+      padding: 11px 20px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      flex: 1;
+      min-width: 140px;
+    }
+    .btn:hover {
+      background: #4338ca;
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: #1e293b;
+      color: #cbd5e1;
+      border: 1px solid #334155;
+    }
+    .btn-secondary:hover {
+      background: #334155;
+      color: #ffffff;
+    }
+    .hint {
+      margin-top: 24px;
+      padding: 14px 20px;
+      border-radius: 12px;
+      background: rgba(14, 165, 233, 0.08);
+      border: 1px solid rgba(14, 165, 233, 0.2);
+      color: #7dd3fc;
+      font-size: 13px;
+      max-width: 900px;
+      width: 100%;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="badge">
+      <span>⚡ ApexGrowth Digital Bot Kit</span>
+    </div>
+    <h1>Telegram Bot Media Assets</h1>
+    <p class="subtitle">Official, pixel-fitted graphics formatted specifically for Telegram BotFather requirements.</p>
+  </div>
+
+  <div class="grid">
+    <!-- Card 1: 1:1 Profile Avatar -->
+    <div class="card">
+      <h2 class="card-title">Bot Profile Avatar</h2>
+      <p class="card-desc">For BotFather &rarr; <strong>Set New Photo</strong> (512&times;512 circular crop)</p>
+      
+      <div class="preview-container">
+        <canvas id="avatarCanvas" class="avatar-canvas" width="512" height="512"></canvas>
+      </div>
+
+      <div class="actions">
+        <button class="btn" onclick="downloadAvatar()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download 512&times;512 PNG
+        </button>
+      </div>
+    </div>
+
+    <!-- Card 2: 16:9 Welcome Message Picture -->
+    <div class="card">
+      <h2 class="card-title">Welcome Picture (Start Page)</h2>
+      <p class="card-desc">For BotFather &rarr; <strong>Set Welcome Picture</strong> (16:9 aspect ratio banner)</p>
+      
+      <div class="preview-container">
+        <canvas id="bannerCanvas" class="banner-canvas" width="960" height="540"></canvas>
+      </div>
+
+      <div class="actions">
+        <button class="btn" onclick="downloadBanner(640, 360, 'apexgrowth_bot_welcome_640x360.png')">
+          <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download 640&times;360 PNG
+        </button>
+        <button class="btn btn-secondary" onclick="downloadBanner(960, 540, 'apexgrowth_bot_welcome_960x540_hd.png')">
+          Download 960&times;540 HD
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="hint">
+    <strong>💡 Upload Instructions in BotFather:</strong><br/>
+    1. Tap <strong>Set Welcome Picture</strong> under your bot's Edit Info menu, and send the downloaded <code>640x360</code> (or <code>960x540</code>) PNG.<br/>
+    2. Tap <strong>Set New Photo</strong> at the top, and send the downloaded <code>512x512</code> circular avatar PNG.
+  </div>
+
+  <script>
+    // 1. Draw Profile Avatar onto Canvas
+    const avatarCanvas = document.getElementById('avatarCanvas');
+    const avatarCtx = avatarCanvas.getContext('2d');
+    const avatarImg = new Image();
+    avatarImg.onload = () => {
+      avatarCtx.drawImage(avatarImg, 0, 0, 512, 512);
+    };
+    avatarImg.src = '/bot-profile-avatar.svg';
+
+    function downloadAvatar() {
+      const link = document.createElement('a');
+      link.download = 'apexgrowth_scout_bot_profile_512x512.png';
+      link.href = avatarCanvas.toDataURL('image/png');
+      link.click();
+    }
+
+    // 2. Draw Welcome Banner onto Canvas
+    const bannerCanvas = document.getElementById('bannerCanvas');
+    const bannerCtx = bannerCanvas.getContext('2d');
+    const bannerImg = new Image();
+    bannerImg.onload = () => {
+      bannerCtx.drawImage(bannerImg, 0, 0, 960, 540);
+    };
+    bannerImg.src = '/bot-welcome-banner.svg';
+
+    function downloadBanner(targetWidth, targetHeight, filename) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = targetWidth;
+      tempCanvas.height = targetHeight;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(bannerImg, 0, 0, targetWidth, targetHeight);
+
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = tempCanvas.toDataURL('image/png');
+      link.click();
+    }
+  </script>
+</body>
+</html>

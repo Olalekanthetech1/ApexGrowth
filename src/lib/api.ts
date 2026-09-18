@@ -18,6 +18,12 @@ import {
   Order,
   PaymentIntent,
   OrderStatus,
+  Opportunity,
+  ScoutSettings,
+  Deal,
+  ActiveProject,
+  ProjectDeliverable,
+  ApprovalGate,
 } from '../types/index';
 
 const API_BASE = '/api';
@@ -357,4 +363,166 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ status, adminNotes }),
     }),
+
+  // Admin Opportunity Scout & Evidence Intelligence
+  getScoutSettings: () => request<ScoutSettings>('/admin/scout/settings'),
+  updateScoutSettings: (data: Partial<ScoutSettings>) =>
+    request<ScoutSettings>('/admin/scout/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  getOpportunities: (filter?: { status?: string; score?: string }) => {
+    const params = new URLSearchParams();
+    if (filter?.status) params.append('status', filter.status);
+    if (filter?.score) params.append('score', filter.score);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return request<Opportunity[]>(`/admin/scout/opportunities${qs}`);
+  },
+  getOpportunityById: (id: string) => request<Opportunity>(`/admin/scout/opportunities/${id}`),
+  getScoutStats: () =>
+    request<{ total: number; drafted: number; approved: number; sent: number; rejected: number }>(
+      '/admin/scout/stats'
+    ),
+  approveOpportunity: (id: string) =>
+    request<{ success: boolean; opportunity: Opportunity }>(`/admin/scout/opportunities/${id}/approve`, {
+      method: 'POST',
+    }),
+  dispatchOpportunity: (id: string, recipientEmail?: string) =>
+    request<{
+      success: boolean;
+      alreadySent?: boolean;
+      provider?: string;
+      messageId?: string;
+      error?: string;
+      opportunity?: Opportunity;
+    }>(`/admin/scout/opportunities/${id}/dispatch`, {
+      method: 'POST',
+      body: JSON.stringify({ recipientEmail }),
+    }),
+  testEmailConnection: (data: {
+    provider: 'gmail' | 'resend';
+    gmailUser?: string;
+    gmailAppPassword?: string;
+    resendApiKey?: string;
+  }) =>
+    request<{ success: boolean; message: string; provider?: string }>(
+      '/admin/scout/email/test',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }
+    ),
+  rejectOpportunity: (id: string) =>
+    request<{ success: boolean; opportunity: Opportunity }>(`/admin/scout/opportunities/${id}/reject`, {
+      method: 'POST',
+    }),
+  refineOpportunity: (id: string, feedback: string) =>
+    request<{ success: boolean; opportunity: Opportunity }>(`/admin/scout/opportunities/${id}/refine`, {
+      method: 'POST',
+      body: JSON.stringify({ feedback }),
+    }),
+  markOpportunitySent: (id: string) =>
+    request<{ success: boolean; opportunity: Opportunity }>(`/admin/scout/opportunities/${id}/mark-sent`, {
+      method: 'POST',
+    }),
+  triggerScoutRun: () =>
+    request<{ success: boolean; result: any }>('/admin/scout/trigger-scout', {
+      method: 'POST',
+    }),
+  auditWebsiteUrl: (websiteUrl: string, prospectName?: string) =>
+    request<{ success: boolean; opportunity: Opportunity }>('/admin/scout/audit-url', {
+      method: 'POST',
+      body: JSON.stringify({ websiteUrl, prospectName }),
+    }),
+  sendTestTelegramAlert: () =>
+    request<{ success: boolean; message: string }>('/admin/scout/test-telegram', {
+      method: 'POST',
+    }),
+  testTavilySearch: (tavilyApiKey?: string) =>
+    request<{ success: boolean; message: string; answer?: string }>('/admin/scout/test-tavily', {
+      method: 'POST',
+      body: JSON.stringify({ tavilyApiKey }),
+    }),
+  fetchAiModels: (provider: string, apiKey: string, customBaseUrl?: string) =>
+    request<{ success: boolean; models: Array<{ id: string; name?: string; owned_by?: string }>; error?: string }>(
+      '/admin/scout/fetch-ai-models',
+      {
+        method: 'POST',
+        body: JSON.stringify({ provider, apiKey, customBaseUrl }),
+      }
+    ),
+  testAiProvider: (provider: string, apiKey: string, model?: string, customBaseUrl?: string) =>
+    request<{ success: boolean; message: string; modelUsed?: string; latencyMs?: number; output?: string }>(
+      '/admin/scout/test-ai-provider',
+      {
+        method: 'POST',
+        body: JSON.stringify({ provider, apiKey, model, customBaseUrl }),
+      }
+    ),
+
+  // Deal-to-Delivery Pipeline API
+  getDeals: (stage?: string) => {
+    const qs = stage ? `?stage=${stage}` : '';
+    return request<Deal[]>(`/admin/pipeline/deals${qs}`);
+  },
+  createDeal: (data: { prospectId: string; servicePackage?: string; proposedPrice?: number }) =>
+    request<Deal>('/admin/pipeline/deals', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateDealStage: (id: string, stage: string) =>
+    request<Deal>(`/admin/pipeline/deals/${id}/stage`, {
+      method: 'PATCH',
+      body: JSON.stringify({ stage }),
+    }),
+  convertDealToProject: (dealId: string) =>
+    request<ActiveProject>(`/admin/pipeline/deals/${dealId}/convert`, {
+      method: 'POST',
+    }),
+  getActiveProjects: (phase?: string) => {
+    const qs = phase ? `?phase=${phase}` : '';
+    return request<ActiveProject[]>(`/admin/pipeline/projects${qs}`);
+  },
+  getProjectById: (id: string) => request<ActiveProject>(`/admin/pipeline/projects/${id}`),
+  updateProjectPhase: (id: string, currentPhase: string) =>
+    request<ActiveProject>(`/admin/pipeline/projects/${id}/phase`, {
+      method: 'PATCH',
+      body: JSON.stringify({ currentPhase }),
+    }),
+  addDeliverable: (data: {
+    projectId: string;
+    title: string;
+    description: string;
+    phase: string;
+    requiresApproval?: boolean;
+    estimatedHours?: number;
+  }) =>
+    request<ProjectDeliverable>('/admin/pipeline/deliverables', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateDeliverableStatus: (id: string, status: string, notes?: string) =>
+    request<ProjectDeliverable>(`/admin/pipeline/deliverables/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, notes }),
+    }),
+  getApprovalGates: (status?: string) => {
+    const qs = status ? `?status=${status}` : '';
+    return request<ApprovalGate[]>(`/admin/pipeline/approvals${qs}`);
+  },
+  decideApprovalGate: (id: string, status: 'APPROVED' | 'REJECTED', reviewNotes?: string) =>
+    request<ApprovalGate>(`/admin/pipeline/approvals/${id}/decision`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reviewNotes }),
+    }),
+  coWorkWithAi: (projectId: string, instruction: string) =>
+    request<{ success: boolean; responseText: string; deliverableId?: string; requiresHumanReview?: boolean }>(
+      `/admin/pipeline/projects/${projectId}/cowork`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ instruction }),
+      }
+    ),
 };
+
+

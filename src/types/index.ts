@@ -330,3 +330,282 @@ export interface AiAnalytics {
   humanHandoffs: number;
   recentConversations: AiConversation[];
 }
+
+// ----------------------------------------------------
+// OPPORTUNITY SCOUT & LEAD INTELLIGENCE SYSTEM
+// ----------------------------------------------------
+
+export type ContactChannel =
+  | 'email'
+  | 'instagram'
+  | 'whatsapp'
+  | 'phone'
+  | 'twitter'
+  | 'linkedin'
+  | 'reddit'
+  | 'discord'
+  | 'website_form'
+  | 'custom';
+
+export type ContactConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface PublicContact {
+  type: ContactChannel;
+  value: string;
+  sourceLocation: string; // e.g. "Public / website contact page", "Public / website footer", "Source post bio"
+  confidence: ContactConfidence;
+  directLink?: string;
+}
+
+export interface EvidenceProvenance {
+  source: string; // e.g. "ApexGrowth audit", "Reddit / r/ecommerce", "DOM metric"
+  testDate: string; // e.g. "Sep 18, 2026"
+  deviceProfile?: 'Mobile' | 'Desktop' | 'General';
+  measurement?: string; // e.g. "Mobile page loaded in ~5.6s", "Missing sticky checkout CTA"
+  originalUrl?: string;
+  evidenceType: 'ApexGrowth Audit' | 'Public Discussion' | 'Verified DOM Metric';
+}
+
+export interface EvidenceObservation {
+  category: 'ux_checkout' | 'mobile_performance' | 'copy_funnel' | 'public_intent';
+  observation: string; // Objective factual statement, e.g. "Observed: checkout CTA requires scrolling"
+  potentialImpact: string; // Measured impact, e.g. "Slower mobile experiences can contribute to checkout friction"
+  sourceOrMethod: string; // e.g. "Website audit test", "Public community post"
+  verified: boolean;
+  provenance?: EvidenceProvenance;
+}
+
+export type OpportunityScore = 'HIGH' | 'MEDIUM' | 'LOW';
+export type OutreachStatus = 'DRAFTED' | 'REFINED' | 'APPROVED' | 'DISPATCHING' | 'SENT' | 'SEND_FAILED' | 'REPLIED' | 'REJECTED';
+
+export interface Opportunity {
+  id: string;
+  opportunityFingerprint: string; // Unique hash(person + company + platform + source_url)
+  title: string;
+  prospectName: string;
+  businessName: string;
+  websiteUrl?: string;
+  niche: string;
+  sourcePlatform: 'reddit' | 'twitter' | 'web_search' | 'shopify_community' | 'manual_audit';
+  sourceUrl: string;
+  sourcePostExcerpt?: string;
+  relevanceSummary: string;
+  evidence: EvidenceObservation[];
+  publicContacts: PublicContact[];
+  
+  // Intelligence Gate Metrics
+  confidenceScores: {
+    identity: number; // 0-100
+    company: number;  // 0-100
+    contact: number;  // 0-100
+    problem: number;  // 0-100
+  };
+  verificationStatus: {
+    identityResolved: boolean;
+    companyVerified: boolean;
+    contactAvailable: boolean;
+    problemExplicit: boolean;
+    auditPerformed: boolean;
+    isDeduplicated: boolean;
+  };
+  isVerifiedOpportunity: boolean; // Must be true for "Approve & Send"
+  
+  opportunityScore: OpportunityScore;
+  outreachStatus: OutreachStatus;
+  outreachDraft: string;
+  refinedDraft?: string;
+  refinementFeedback?: string;
+  telegramMessageId?: string;
+  actionApprovedAt?: string;
+  actionSentAt?: string;
+  actionRejectedAt?: string;
+  sentChannel?: string;
+  sentProvider?: 'gmail' | 'resend' | string;
+  outreachMessageId?: string;
+  resendMessageId?: string;
+  recipientEmail?: string;
+  sendErrorReason?: string;
+  emailSubject?: string;
+  dispatchAttemptId?: string;
+  dispatchAttemptAt?: string;
+  nextFollowUpDate?: string;
+  prospectReply?: string;
+  prospectRepliedAt?: string;
+  dealId?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScoutSettings {
+  id: string;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  telegramEnabled: boolean;
+  tavilyApiKey?: string;
+  tavilyEnabled: boolean;
+  autonomousWorkerEnabled: boolean;
+  runIntervalMinutes: number;
+  targetNiches: string[];
+  intentKeywords: string[];
+  // Dynamic AI Provider Settings
+  aiProvider?: 'gemini' | 'groq' | 'mistral' | 'nvidia' | 'custom';
+  aiModel?: string;
+  geminiApiKey?: string;
+  groqApiKey?: string;
+  mistralApiKey?: string;
+  nvidiaApiKey?: string;
+  secondaryAiApiKey?: string;
+  secondaryAiBaseUrl?: string;
+  aiTemperature?: number;
+  // Outbound Email Provider Abstraction Settings
+  emailProvider?: 'gmail' | 'resend';
+  gmailUser?: string;
+  gmailAppPassword?: string;
+  resendApiKey?: string;
+  resendFromEmail?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  lastRunAt?: string;
+  totalScoutedCount: number;
+  updatedAt: string;
+}
+
+// ----------------------------------------------------
+// ApexGrowth Assistant: Deal-to-Delivery Pipeline Types
+// ----------------------------------------------------
+
+export type DealStage =
+  | 'OPEN'
+  | 'QUALIFIED'
+  | 'PROPOSAL_SENT'
+  | 'NEGOTIATING'
+  | 'WON'
+  | 'LOST'
+  | 'ON_HOLD';
+
+export type DealPaymentStatus = 'UNPAID' | 'PARTIAL' | 'PAID' | 'REFUNDED';
+export type DealAgreementStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED';
+
+export interface Deal {
+  id: string;
+  prospectId?: string;
+  clientName: string;
+  clientEmail?: string;
+  clientCompany?: string;
+  clientWebsite?: string;
+  servicePackage: string; // e.g. "48-Hour CRO Funnel Sprint", "Landing Page Overhaul", "Full Funnel & Ad Engine"
+  proposedPrice: number;
+  currency: string;
+  stage: DealStage;
+  proposalSummary?: string;
+  proposalDraft?: string;
+  negotiationNotes?: string;
+  paymentStatus: DealPaymentStatus;
+  agreementStatus: DealAgreementStatus;
+  expectedDeliveryDate?: string;
+  projectId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ProjectPhase =
+  | 'PROJECT_CREATED'
+  | 'KICKOFF'
+  | 'PHASE_1'
+  | 'PHASE_2'
+  | 'REVIEW'
+  | 'DELIVERED'
+  | 'COMPLETED'
+  | 'RETAINER';
+
+export type DeliverableStatus = 'TODO' | 'IN_PROGRESS' | 'READY_FOR_REVIEW' | 'APPROVED' | 'DELIVERED';
+
+export interface ProjectDeliverable {
+  id: string;
+  projectId: string;
+  title: string;
+  phase: string;
+  description: string;
+  status: DeliverableStatus;
+  draftContent?: string;
+  finalContent?: string;
+  clientFeedback?: string;
+  requiresApproval?: boolean;
+  estimatedHours?: number;
+  orderIndex: number;
+  updatedAt: string;
+}
+
+export interface ProjectActivity {
+  id: string;
+  projectId?: string;
+  dealId?: string;
+  actor: 'USER' | 'AI_ASSISTANT' | 'TELEGRAM_BOT' | 'SYSTEM';
+  eventType:
+    | 'DEAL_CREATED'
+    | 'PROPOSAL_DRAFTED'
+    | 'PROPOSAL_SENT'
+    | 'DEAL_WON'
+    | 'PROJECT_CREATED'
+    | 'PHASE_ADVANCED'
+    | 'DELIVERABLE_GENERATED'
+    | 'APPROVAL_REQUESTED'
+    | 'APPROVAL_GRANTED'
+    | 'NOTE_ADDED';
+  summary: string;
+  details?: string;
+  createdAt: string;
+}
+
+export interface ApprovalGate {
+  id: string;
+  dealId?: string;
+  projectId?: string;
+  targetEntity?: string;
+  targetId?: string;
+  actionType:
+    | 'SEND_PROPOSAL'
+    | 'MARK_DELIVERED'
+    | 'CONVERT_TO_PROJECT'
+    | 'SEND_CLIENT_EMAIL'
+    | 'ADVANCE_PHASE'
+    | string;
+  title: string;
+  description: string;
+  proposedPayload?: Record<string, any>;
+  payloadSnapshot?: Record<string, any>;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  reviewedAt?: string;
+  reviewNotes?: string;
+  createdAt: string;
+}
+
+export interface ActiveProject {
+  id: string;
+  dealId: string;
+  prospectId?: string;
+  clientName: string;
+  clientEmail?: string;
+  clientCompany?: string;
+  clientWebsite?: string;
+  servicePackage: string;
+  agreedPrice: number;
+  currency: string;
+  currentPhase: ProjectPhase;
+  projectBrief: string;
+  diagnosticDossier?: {
+    problemsDetected: string[];
+    liveAuditObservations: string[];
+    conversionFriction: string[];
+  };
+  deliverables?: ProjectDeliverable[];
+  activities?: ProjectActivity[];
+  pendingApprovals?: ApprovalGate[];
+  kickoffDate: string;
+  targetDeliveryDate?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+

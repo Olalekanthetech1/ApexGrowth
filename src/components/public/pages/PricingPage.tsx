@@ -31,8 +31,8 @@ export function PricingPage({ onNavigate }: PricingPageProps) {
     } else if (pkg.ctaAction === 'contact') {
       onNavigate('/contact');
     } else {
-      setSelectedPkgForCheckout(pkg);
-      setIsCheckoutOpen(true);
+      // Navigate directly to dedicated secure checkout route
+      onNavigate(`/checkout/${pkg.slug}`);
     }
   };
 

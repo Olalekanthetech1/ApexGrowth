@@ -163,7 +163,7 @@ async function runPaystackSecurityMatrix() {
   try {
     const rawPayload = JSON.stringify({ event: 'charge.success', data: { reference: 'APX-123' } });
     const fakeSig = 'bad_forged_signature_1234567890abcdef';
-    const isValid = paystackService.verifyWebhookSignature(rawPayload, fakeSig);
+    const isValid = await paystackService.verifyWebhookSignature(rawPayload, fakeSig);
     record('PAY-06', 'Invalid Webhook Signature Rejection', isValid === false, 'Forged signature rejected');
   } catch (err: any) {
     record('PAY-06', 'Invalid Webhook Signature Rejection', false, err.message);
@@ -174,7 +174,7 @@ async function runPaystackSecurityMatrix() {
   // ----------------------------------------------------
   try {
     const rawPayload = JSON.stringify({ event: 'charge.success', data: { reference: 'APX-123' } });
-    const isValid = paystackService.verifyWebhookSignature(rawPayload, undefined);
+    const isValid = await paystackService.verifyWebhookSignature(rawPayload, undefined);
     record('PAY-07', 'Missing Webhook Signature Rejection', isValid === false, 'Undefined signature rejected');
   } catch (err: any) {
     record('PAY-07', 'Missing Webhook Signature Rejection', false, err.message);

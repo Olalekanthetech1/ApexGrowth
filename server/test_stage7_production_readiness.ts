@@ -75,7 +75,7 @@ async function runStage7ProductionReadinessSuite() {
   // PROD-05: Webhook Signature Validation
   try {
     const dummyRawBody = Buffer.from(JSON.stringify({ event: 'charge.success', data: { reference: 'TEST-REF-999' } }));
-    const resultInvalid = paystackService.verifyWebhookSignature(dummyRawBody, 'invalid_signature_hash');
+    const resultInvalid = await paystackService.verifyWebhookSignature(dummyRawBody, 'invalid_signature_hash');
     assert(!resultInvalid, 'PROD-05', 'Paystack HMAC SHA-512 webhook signature verification rejects forged signatures');
   } catch (err: any) {
     assert(false, 'PROD-05', 'Webhook signature validation', err.message);

@@ -176,8 +176,8 @@ async function runStage4CAudit() {
   const validSig = crypto.createHmac('sha512', testSecret).update(payloadStr).digest('hex');
   const invalidSig = 'invalid_sha512_hash_abcdef123456789';
 
-  const isValid1 = paystackService.verifyWebhookSignature(payloadStr, validSig);
-  const isValid2 = paystackService.verifyWebhookSignature(payloadStr, invalidSig);
+  const isValid1 = await paystackService.verifyWebhookSignature(payloadStr, validSig);
+  const isValid2 = await paystackService.verifyWebhookSignature(payloadStr, invalidSig);
 
   if (!isValid1) throw new Error('Valid HMAC SHA-512 signature was incorrectly rejected!');
   if (isValid2) throw new Error('CRITICAL SECURITY FAIL: Invalid HMAC SHA-512 signature was ACCEPTED!');

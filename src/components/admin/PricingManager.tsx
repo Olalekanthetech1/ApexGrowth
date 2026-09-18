@@ -54,7 +54,7 @@ export function PricingManager() {
       isFeatured: false,
       badgeText: '',
       ctaText: 'Get Started Now',
-      ctaAction: 'checkout',
+      ctaAction: 'checkout_demo',
       active: true,
       displayOrder: packages.length + 1,
     });
@@ -214,50 +214,64 @@ export function PricingManager() {
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Regular Price (USD $) *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="249"
-                  value={editingPkg.priceUsd ?? ''}
-                  onChange={(e) => setEditingPkg({ ...editingPkg, priceUsd: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white font-mono outline-none"
-                />
-              </div>
+             <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
+               <div>
+                 <label className="block text-xs font-semibold text-slate-300 mb-1">Regular Price (USD $) *</label>
+                 <input
+                   type="text"
+                   required
+                   placeholder="249"
+                   value={editingPkg.priceUsd ?? ''}
+                   onChange={(e) => setEditingPkg({ ...editingPkg, priceUsd: e.target.value })}
+                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white font-mono outline-none"
+                 />
+               </div>
+ 
+               <div>
+                 <label className="block text-xs font-semibold text-slate-300 mb-1">Promo Price (USD $, Optional)</label>
+                 <input
+                   type="text"
+                   placeholder="199"
+                   value={editingPkg.promoPriceUsd ?? ''}
+                   onChange={(e) => setEditingPkg({ ...editingPkg, promoPriceUsd: e.target.value })}
+                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white font-mono outline-none"
+                 />
+               </div>
+ 
+               <div>
+                 <label className="block text-xs font-semibold text-slate-300 mb-1">Display Order</label>
+                 <input
+                   type="number"
+                   value={editingPkg.displayOrder ?? 0}
+                   onChange={(e) => setEditingPkg({ ...editingPkg, displayOrder: parseInt(e.target.value) || 0 })}
+                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white outline-none"
+                 />
+               </div>
+ 
+               <div>
+                 <label className="block text-xs font-semibold text-slate-300 mb-1">CTA Button Text</label>
+                 <input
+                   type="text"
+                   value={editingPkg.ctaText || 'Get Started Now'}
+                   onChange={(e) => setEditingPkg({ ...editingPkg, ctaText: e.target.value })}
+                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white outline-none"
+                 />
+               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Promo Price (USD $, Optional)</label>
-                <input
-                  type="text"
-                  placeholder="199"
-                  value={editingPkg.promoPriceUsd ?? ''}
-                  onChange={(e) => setEditingPkg({ ...editingPkg, promoPriceUsd: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white font-mono outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Display Order</label>
-                <input
-                  type="number"
-                  value={editingPkg.displayOrder ?? 0}
-                  onChange={(e) => setEditingPkg({ ...editingPkg, displayOrder: parseInt(e.target.value) || 0 })}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">CTA Button Text</label>
-                <input
-                  type="text"
-                  value={editingPkg.ctaText || 'Get Started Now'}
-                  onChange={(e) => setEditingPkg({ ...editingPkg, ctaText: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white outline-none"
-                />
-              </div>
-            </div>
+               <div>
+                 <label className="block text-xs font-semibold text-slate-300 mb-1">CTA Action / Behavior</label>
+                 <select
+                   value={editingPkg.ctaAction || 'checkout_demo'}
+                   onChange={(e) => setEditingPkg({ ...editingPkg, ctaAction: e.target.value as any })}
+                   className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl px-3 py-2 text-sm text-white outline-none"
+                 >
+                   <option value="checkout_demo">💳 Live Checkout Gateway</option>
+                   <option value="whatsapp">💬 Chat on WhatsApp</option>
+                   <option value="contact">✉️ Scroll to Contact Form</option>
+                   <option value="payment_link">🔗 External Payment Link</option>
+                 </select>
+               </div>
+             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
               <div className="flex items-center gap-2 pt-2">

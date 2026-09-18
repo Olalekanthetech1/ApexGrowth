@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { dbService } from './dbService.js';
 
 export interface PaystackInitResponse {
   authorization_url: string;
@@ -28,8 +29,21 @@ export interface PaystackVerifyData {
 }
 
 export class PaystackService {
-  private getSecretKey(): string {
-    return process.env.PAYSTACK_SECRET_KEY || '';
+  private async getSecretKey(): Promise<string> {
+    if (process.env.PAYSTACK_SECRET_KEY && process.env.PAYSTACK_SECRET_KEY.trim()) {
+      return process.env.PAYSTACK_SECRET_KEY.trim();
+    }
+    try {
+      const methods = await dbService.getPaymentMethods(false);
+      const paystack = methods.find(m => m.provider === 'paystack');
+      const metadata = (paystack?.configMetadata as any) || {};
+      if (metadata.secretKey && typeof metadata.secretKey === 'string' && metadata.secretKey.trim()) {
+        return metadata.secretKey.trim();
+      }
+    } catch (err: any) {
+      console.warn('[PaystackService] Could not read secretKey from DB:', err.message);
+    }
+    return '';
   }
 
   /**
@@ -51,14 +65,14 @@ export class PaystackService {
   /**
    * Cryptographically verifies Paystack HMAC SHA-512 webhook signature against raw request body
    */
-  verifyWebhookSignature(rawBody: Buffer | string | undefined, signature: string | undefined): boolean {
+  async verifyWebhookSignature(rawBody: Buffer | string | undefined, signature: string | undefined): Promise<boolean> {
     if (!rawBody || !signature) {
       return false;
     }
 
-    const secretKey = this.getSecretKey();
+    const secretKey = await this.getSecretKey();
     if (!secretKey) {
-      console.warn('[PaystackService] No PAYSTACK_SECRET_KEY configured; webhook signature verification failed.');
+      console.warn('[PaystackService] No Paystack Secret Key configured in environment or database; webhook signature verification failed.');
       return false;
     }
 
@@ -90,17 +104,11 @@ export class PaystackService {
     callbackUrl?: string;
     metadata?: Record<string, any>;
   }): Promise<PaystackInitResponse> {
-    const secretKey = this.getSecretKey();
+    const secretKey = await this.getSecretKey();
     const minorUnits = this.toMinorUnits(params.amountUsd);
 
-    // If no secret key is set and in non-production development mode, provide a mock checkout fallback URL
     if (!secretKey) {
-      console.warn('[PaystackService] PAYSTACK_SECRET_KEY not set. Using test checkout simulation URL.');
-      return {
-        authorization_url: `https://checkout.paystack.com/test_${params.reference}`,
-        access_code: `mock_code_${params.reference}`,
-        reference: params.reference,
-      };
+      throw new Error('Paystack Secret Key is not configured yet. Please configure your Secret Key in the Admin Dashboard > Payment Methods > Paystack Gateway.');
     }
 
     let payload: Record<string, any> = {
@@ -186,9 +194,9 @@ export class PaystackService {
    * Verifies a Paystack transaction directly with Paystack's official API
    */
   async verifyTransaction(reference: string): Promise<PaystackVerifyData> {
-    const secretKey = this.getSecretKey();
+    const secretKey = await this.getSecretKey();
     if (!secretKey) {
-      throw new Error('PAYSTACK_SECRET_KEY is required for live transaction verification');
+      throw new Error('Paystack Secret Key is not configured yet. Please configure your Secret Key in the Admin Dashboard > Payment Methods > Paystack Gateway.');
     }
 
     const controller = new AbortController();

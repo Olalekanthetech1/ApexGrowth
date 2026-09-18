@@ -451,3 +451,192 @@ export const aiMessagesRelations = relations(aiMessages, ({ one }) => ({
     references: [aiConversations.id],
   }),
 }));
+
+// 19. Opportunities Table (24/7 Scout & Evidence Intelligence)
+export const opportunities = pgTable(
+  'opportunities',
+  {
+    id: text('id').primaryKey(),
+    title: text('title').notNull(),
+    prospectName: text('prospect_name').notNull(),
+    businessName: text('business_name').notNull(),
+    websiteUrl: text('website_url'),
+    niche: text('niche').notNull(),
+    sourcePlatform: text('source_platform').default('web_search').notNull(), // 'reddit' | 'twitter' | 'web_search' | 'shopify_community' | 'manual_audit'
+    sourceUrl: text('source_url').notNull(),
+    sourcePostExcerpt: text('source_post_excerpt'),
+    relevanceSummary: text('relevance_summary').notNull(),
+    evidence: jsonb('evidence').default([]).notNull(), // Array of EvidenceObservation
+    publicContacts: jsonb('public_contacts').default([]).notNull(), // Array of PublicContact with explicit provenance & confidence
+    opportunityScore: text('opportunity_score').default('MEDIUM').notNull(), // 'HIGH' | 'MEDIUM' | 'LOW'
+    outreachStatus: text('outreach_status').default('DRAFTED').notNull(), // 'DRAFTED' | 'REFINED' | 'APPROVED' | 'SENT' | 'REJECTED'
+    outreachDraft: text('outreach_draft').notNull(),
+    refinedDraft: text('refined_draft'),
+    refinementFeedback: text('refinement_feedback'),
+    telegramMessageId: text('telegram_message_id'),
+    actionApprovedAt: timestamp('action_approved_at', { withTimezone: true }),
+    actionSentAt: timestamp('action_sent_at', { withTimezone: true }),
+    actionRejectedAt: timestamp('action_rejected_at', { withTimezone: true }),
+    sentChannel: text('sent_channel'),
+    sentProvider: text('sent_provider'),
+    outreachMessageId: text('outreach_message_id'),
+    resendMessageId: text('resend_message_id'),
+    recipientEmail: text('recipient_email'),
+    sendErrorReason: text('send_error_reason'),
+    emailSubject: text('email_subject'),
+    dispatchAttemptId: text('dispatch_attempt_id'),
+    dispatchAttemptAt: timestamp('dispatch_attempt_at', { withTimezone: true }),
+    nextFollowUpDate: timestamp('next_follow_up_date', { withTimezone: true }),
+    prospectReply: text('prospect_reply'),
+    prospectRepliedAt: timestamp('prospect_replied_at', { withTimezone: true }),
+    dealId: text('deal_id'),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('opportunities_status_idx').on(table.outreachStatus),
+    index('opportunities_score_idx').on(table.opportunityScore),
+    index('opportunities_created_at_idx').on(table.createdAt),
+    index('opportunities_source_url_idx').on(table.sourceUrl),
+  ]
+);
+
+// 20. Scout Settings Table
+export const scoutSettings = pgTable(
+  'scout_settings',
+  {
+    id: text('id').primaryKey(),
+    telegramBotToken: text('telegram_bot_token'),
+    telegramChatId: text('telegram_chat_id'),
+    telegramEnabled: boolean('telegram_enabled').default(false).notNull(),
+    tavilyApiKey: text('tavily_api_key'),
+    tavilyEnabled: boolean('tavily_enabled').default(true).notNull(),
+    autonomousWorkerEnabled: boolean('autonomous_worker_enabled').default(true).notNull(),
+    runIntervalMinutes: integer('run_interval_minutes').default(60).notNull(),
+    targetNiches: jsonb('target_niches').default(['E-commerce Brands', 'Shopify Store Owners', 'Course & Digital Creators', 'High-Ticket Coaches']).notNull(),
+    intentKeywords: jsonb('intent_keywords').default(['checkout dropoff', 'low conversion rate', 'feedback on store', 'need landing page', 'video ad script', 'abandoned carts']).notNull(),
+    aiProvider: text('ai_provider').default('gemini').notNull(),
+    aiModel: text('ai_model').default('gemini-2.5-flash').notNull(),
+    geminiApiKey: text('gemini_api_key'),
+    groqApiKey: text('groq_api_key'),
+    mistralApiKey: text('mistral_api_key'),
+    nvidiaApiKey: text('nvidia_api_key'),
+    secondaryAiApiKey: text('secondary_ai_api_key'),
+    secondaryAiBaseUrl: text('secondary_ai_base_url'),
+    aiTemperature: integer('ai_temperature').default(70),
+    // Outbound Email Provider Abstraction Settings
+    emailProvider: text('email_provider').default('gmail').notNull(),
+    gmailUser: text('gmail_user'),
+    gmailAppPassword: text('gmail_app_password'),
+    resendApiKey: text('resend_api_key'),
+    resendFromEmail: text('resend_from_email').default('ApexGrowth Growth Team <onboarding@resend.dev>'),
+    smtpHost: text('smtp_host'),
+    smtpPort: integer('smtp_port').default(465),
+    lastRunAt: timestamp('last_run_at', { withTimezone: true }),
+    totalScoutedCount: integer('total_scouted_count').default(0).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  }
+);
+
+// 21. Deals Table
+export const deals = pgTable(
+  'deals',
+  {
+    id: text('id').primaryKey(),
+    prospectId: text('prospect_id'),
+    clientName: text('client_name').notNull(),
+    clientEmail: text('client_email'),
+    clientCompany: text('client_company'),
+    clientWebsite: text('client_website'),
+    servicePackage: text('service_package').notNull(),
+    proposedPrice: integer('proposed_price').notNull().default(0),
+    currency: text('currency').notNull().default('USD'),
+    stage: text('stage').notNull().default('OPEN'),
+    proposalSummary: text('proposal_summary'),
+    proposalDraft: text('proposal_draft'),
+    negotiationNotes: text('negotiation_notes'),
+    paymentStatus: text('payment_status').notNull().default('UNPAID'),
+    agreementStatus: text('agreement_status').notNull().default('PENDING'),
+    expectedDeliveryDate: timestamp('expected_delivery_date', { withTimezone: true }),
+    projectId: text('project_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  }
+);
+
+// 22. Active Projects Table
+export const activeProjects = pgTable(
+  'active_projects',
+  {
+    id: text('id').primaryKey(),
+    dealId: text('deal_id').notNull(),
+    prospectId: text('prospect_id'),
+    clientName: text('client_name').notNull(),
+    clientEmail: text('client_email'),
+    clientCompany: text('client_company'),
+    clientWebsite: text('client_website'),
+    servicePackage: text('service_package').notNull(),
+    agreedPrice: integer('agreed_price').notNull().default(0),
+    currency: text('currency').notNull().default('USD'),
+    currentPhase: text('current_phase').notNull().default('PROJECT_CREATED'),
+    projectBrief: text('project_brief').notNull(),
+    diagnosticDossier: jsonb('diagnostic_dossier'),
+    kickoffDate: timestamp('kickoff_date', { withTimezone: true }).defaultNow().notNull(),
+    targetDeliveryDate: timestamp('target_delivery_date', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  }
+);
+
+// 23. Project Deliverables Table
+export const projectDeliverables = pgTable(
+  'project_deliverables',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id').notNull(),
+    title: text('title').notNull(),
+    phase: text('phase').notNull().default('PHASE_1'),
+    description: text('description').notNull(),
+    status: text('status').notNull().default('TODO'),
+    draftContent: text('draft_content'),
+    finalContent: text('final_content'),
+    clientFeedback: text('client_feedback'),
+    orderIndex: integer('order_index').default(0).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  }
+);
+
+// 24. Project Activities & Audit Trail Table
+export const projectActivities = pgTable(
+  'project_activities',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id'),
+    dealId: text('deal_id'),
+    actor: text('actor').notNull().default('SYSTEM'),
+    eventType: text('event_type').notNull(),
+    summary: text('summary').notNull(),
+    details: text('details'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  }
+);
+
+// 25. Approval Gates Table
+export const approvalGates = pgTable(
+  'approval_gates',
+  {
+    id: text('id').primaryKey(),
+    dealId: text('deal_id'),
+    projectId: text('project_id'),
+    actionType: text('action_type').notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull(),
+    proposedPayload: jsonb('proposed_payload'),
+    status: text('status').notNull().default('PENDING'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  }
+);
+

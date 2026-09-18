@@ -22,7 +22,10 @@ import {
   MessageCircle,
   Coins,
   Database,
-  Star
+  Star,
+  Radar,
+  Sliders,
+  Briefcase,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { usePublicData } from '../../context/PublicDataContext';
@@ -30,6 +33,7 @@ import { api } from '../../lib/api';
 
 // New Bespoke Tab Managers
 import { LeadsCRMManager } from './LeadsCRMManager';
+import { PipelineOperationsManager } from './PipelineOperationsManager';
 import { OrdersManager } from './OrdersManager';
 import { ServicesPricingManager } from './ServicesPricingManager';
 import { DemosManager } from './DemosManager';
@@ -39,6 +43,8 @@ import { CryptoGatewaySettings } from './CryptoGatewaySettings';
 import { PaystackGatewaySettings } from './PaystackGatewaySettings';
 import { ContactBankSettings } from './ContactBankSettings';
 import { NeonDatabaseManager } from './NeonDatabaseManager';
+import { OpportunityScoutManager } from './OpportunityScoutManager';
+import { IntegrationsManager } from './IntegrationsManager';
 
 // Classic admin components if they navigate to older pages
 import { AIIntelligenceManager } from './AIIntelligenceManager';
@@ -63,9 +69,9 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
     const path = window.location.pathname.replace(/\/admin\/?/, '').toLowerCase();
     if (!path || path === 'dashboard') return 'leads';
     const allowed = [
-      'leads', 'orders', 'services-pricing', 'demos', 'testimonials', 'faq',
+      'leads', 'pipeline-operations', 'orders', 'services-pricing', 'demos', 'testimonials', 'faq',
       'crypto-settings', 'paystack-settings', 'contact-bank', 'neon-database',
-      'business', 'seo', 'socials', 'users', 'activity', 'settings', 'ai-intelligence'
+      'scout-intelligence', 'ai-intelligence', 'business', 'seo', 'socials', 'users', 'activity', 'settings'
     ];
     return allowed.includes(path) ? path : 'leads';
   };
@@ -77,11 +83,13 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
   // Dynamic Live Counts State
   const [counts, setCounts] = useState({
     leads: 0,
+    pipeline: 0,
     orders: 0,
     services: 0,
     demos: 0,
     testimonials: 0,
     faqs: 0,
+    scout: 0,
   });
 
   // Sync with browser back/forward buttons
@@ -97,17 +105,21 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
   useEffect(() => {
     const fetchCounts = async () => {
       try {
-        const [stats, orders] = await Promise.all([
+        const [stats, orders, scoutStats, dealsData] = await Promise.all([
           api.getDashboardStats(),
           api.getOrders(),
+          api.getScoutStats().catch(() => ({ total: 0 })),
+          api.getDeals().catch(() => []),
         ]);
         setCounts({
           leads: stats.totalLeads || 0,
+          pipeline: dealsData?.length || 0,
           orders: orders?.length || 0,
           services: (stats.activeServices || 0) + (stats.activePackages || 0),
           demos: stats.publishedDemos || 0,
           testimonials: stats.publishedTestimonials || 0,
           faqs: stats.publishedFaqs || 0,
+          scout: scoutStats.total || 0,
         });
       } catch (e) {
         console.error('Failed to load dynamic counts', e);
@@ -135,6 +147,7 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
       title: 'Navigation Console',
       items: [
         { id: 'leads', label: 'Analytics & Leads', icon: Users, hasDot: true },
+        { id: 'pipeline-operations', label: 'Deal & Delivery Pipeline', icon: Briefcase, badge: 'OPERATIONS', count: counts.pipeline },
         { id: 'orders', label: 'Orders List', icon: ShoppingBag, count: counts.orders },
         { id: 'services-pricing', label: 'Services & Pricing', icon: Layers, count: counts.services },
         { id: 'demos', label: 'Proof Gallery', icon: Film, count: counts.demos },
@@ -145,6 +158,8 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
     {
       title: 'Gateways & Integrations',
       items: [
+        { id: 'scout-intelligence', label: 'Copilot Ally Scout', icon: Radar, badge: '24/7 BOT', count: counts.scout },
+        { id: 'integrations-settings', label: 'Integrations Hub', icon: Sliders, badge: 'TELEGRAM & TAVILY' },
         { id: 'crypto-settings', label: 'Crypto (BYBIT)', icon: Coins, badge: 'BYBIT' },
         { id: 'paystack-settings', label: 'Paystack Setup', icon: CreditCard, badge: 'USD CARDS' },
         { id: 'contact-bank', label: 'Contact & Bank', icon: Phone },
@@ -166,6 +181,9 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
 
   const premiumTabs = [
     { id: 'leads', label: 'Live Analytics & Leads', hasDot: true },
+    { id: 'pipeline-operations', label: `Deal & Delivery Pipeline (${counts.pipeline})`, badge: 'DEALS & SPRINTS', badgeColor: 'bg-indigo-500/15 text-indigo-500 dark:text-indigo-400 border border-indigo-500/30 font-bold' },
+    { id: 'scout-intelligence', label: `Copilot Ally Scout (${counts.scout})`, badge: '24/7 BOT', badgeColor: 'bg-indigo-500/15 text-indigo-500 dark:text-indigo-400 border border-indigo-500/30 font-bold' },
+    { id: 'integrations-settings', label: 'Integrations Hub', badge: 'CONFIG', badgeColor: 'bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/30 font-bold' },
     { id: 'orders', label: `Orders (${counts.orders})` },
     { id: 'services-pricing', label: `Services & Pricing (${counts.services})` },
     { id: 'demos', label: `Proof Gallery (${counts.demos})` },
@@ -181,6 +199,12 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
     switch (activeTab) {
       case 'leads':
         return <LeadsCRMManager initialSelectedLead={selectedLeadForDetail} />;
+      case 'pipeline-operations':
+        return <PipelineOperationsManager />;
+      case 'scout-intelligence':
+        return <OpportunityScoutManager />;
+      case 'integrations-settings':
+        return <IntegrationsManager />;
       case 'orders':
         return <OrdersManager />;
       case 'services-pricing':
@@ -243,6 +267,14 @@ export function AdminLayout({ onBackToSite }: AdminLayoutProps) {
           </button>
         </div>
       </div>
+
+      {/* Mobile Sidebar Backdrop */}
+      {mobileSidebarOpen && (
+        <div
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-30 md:hidden"
+        />
+      )}
 
       {/* Responsive Sidebar */}
       <aside

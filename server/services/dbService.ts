@@ -24,6 +24,8 @@ import {
   AiMessage,
   AiEvent,
   AiAnalytics,
+  Opportunity,
+  ScoutSettings,
 } from '../../src/types/index.js';
 
 export const ALLOWED_ORDER_TRANSITIONS: Record<string, string[]> = {
@@ -1266,33 +1268,38 @@ export class DatabaseService {
 
       if (params.paymentProvider === 'paystack') {
         paymentType = 'card';
-        paymentUrl = pm?.paymentUrl || 'https://paystack.shop/apexgrowth-usd';
+        paymentUrl = pm?.paymentUrl || '';
         initialStatus = 'pending';
       } else if (params.paymentProvider === 'bybit') {
         paymentType = 'crypto';
-        paymentUrl = pm?.paymentUrl || 'https://pay.bybit.com/checkout/apexgrowth';
+        paymentUrl = pm?.paymentUrl || '';
         const meta = (pm?.configMetadata as any) || {};
-        cryptoAddress = meta.depositAddressTRC20 || 'TX9aR8k4wZ3yL7qK2L9ApexGrowthUSD';
-        cryptoNetwork = 'USDT (TRC20 / ERC20)';
+        const addresses = meta.addresses || {};
+        const usdt = addresses.usdt;
+        cryptoAddress = typeof usdt === 'object' ? usdt.address : (usdt || meta.depositAddressTRC20 || '');
+        cryptoNetwork = (typeof usdt === 'object' && usdt.network) ? usdt.network : 'USDT (TRC20)';
         initialStatus = 'awaiting_payment';
       } else if (params.paymentProvider === 'grey') {
         paymentType = 'bank_transfer';
         const meta = (pm?.configMetadata as any) || {};
-        const bankName = meta.bankName || 'Lead Bank / Grey USD Partner';
-        const accountName = meta.accountName || 'ApexGrowth Digital Ltd';
-        const accountNumber = meta.accountNumber || '9830219482';
-        const routingNumber = meta.routingNumber || '101000695';
-        const swiftBic = meta.swiftBic || 'LEADUS33XXX';
+        const usdConfig = meta.usd || {};
+        const bankName = usdConfig.bankName || meta.bankName || '';
+        const beneficiary = usdConfig.beneficiary || meta.accountName || '';
+        const accountNumber = usdConfig.accountNumber || meta.accountNumber || '';
+        const routingNumber = usdConfig.routingNumber || meta.routingNumber || '';
 
-        transferInstructions =
-          `Please transfer $${authoritativePrice} USD via International Wire or ACH to:\n` +
-          `• Bank Name: ${bankName}\n` +
-          `• Account Name: ${accountName}\n` +
-          `• Account Number: ${accountNumber}\n` +
-          `• Routing / ABA: ${routingNumber}\n` +
-          `• SWIFT / BIC: ${swiftBic}\n` +
-          `• Payment Reference: ${reference}\n\n` +
-          `IMPORTANT: Include the Payment Reference "${reference}" in your transfer description so our billing team can verify and confirm your order promptly.`;
+        if (bankName || accountNumber) {
+          transferInstructions =
+            `Please transfer $${authoritativePrice} USD via International Wire or ACH to:\n` +
+            (bankName ? `• Bank Name: ${bankName}\n` : '') +
+            (beneficiary ? `• Beneficiary / Account Name: ${beneficiary}\n` : '') +
+            (accountNumber ? `• Account Number: ${accountNumber}\n` : '') +
+            (routingNumber ? `• Routing Number: ${routingNumber}\n` : '') +
+            `• Payment Reference: ${reference}\n\n` +
+            `IMPORTANT: Include the Payment Reference "${reference}" in your transfer description so our billing team can verify and confirm your order promptly.`;
+        } else {
+          transferInstructions = `Please contact billing or complete transfer with Payment Reference "${reference}".`;
+        }
         initialStatus = 'awaiting_payment';
       } else {
         paymentType = 'card';
@@ -2340,6 +2347,867 @@ export class DatabaseService {
 
     return createdLead;
   }
+
+  // ==========================================
+  // OPPORTUNITY SCOUT & INTELLIGENCE
+  // ==========================================
+  private scoutTablesChecked = false;
+  private useInMemoryScoutStore = false;
+  private inMemoryOpportunities = new Map<string, Opportunity>();
+  private inMemoryScoutSettings: ScoutSettings = {
+    id: 'scout_settings_primary',
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+    telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+    telegramEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+    tavilyApiKey: process.env.TAVILY_API_KEY || '',
+    tavilyEnabled: Boolean(process.env.TAVILY_API_KEY),
+    autonomousWorkerEnabled: true,
+    runIntervalMinutes: 60,
+    targetNiches: ['E-commerce Brands', 'Shopify Store Owners', 'Course & Digital Creators', 'High-Ticket Coaches'],
+    intentKeywords: ['checkout dropoff', 'low conversion rate', 'feedback on store', 'need landing page', 'video ad script', 'abandoned carts'],
+    aiProvider: 'gemini',
+    aiModel: 'gemini-2.5-flash',
+    emailProvider: (process.env.EMAIL_OUTREACH_PROVIDER as any) || 'gmail',
+    gmailUser: process.env.GMAIL_USER || process.env.SMTP_USER || '',
+    gmailAppPassword: process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || '',
+    resendApiKey: process.env.RESEND_API_KEY || '',
+    resendFromEmail: process.env.RESEND_FROM_EMAIL || 'ApexGrowth Growth Team <onboarding@resend.dev>',
+    smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+    smtpPort: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465,
+    totalScoutedCount: 0,
+    updatedAt: new Date().toISOString(),
+  };
+
+  private async ensureScoutTablesExist(): Promise<void> {
+    if (this.scoutTablesChecked) return;
+    try {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS opportunities (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          prospect_name TEXT NOT NULL,
+          business_name TEXT NOT NULL,
+          website_url TEXT,
+          niche TEXT NOT NULL,
+          source_platform TEXT NOT NULL DEFAULT 'web_search',
+          source_url TEXT NOT NULL,
+          source_post_excerpt TEXT,
+          relevance_summary TEXT NOT NULL,
+          evidence JSONB NOT NULL DEFAULT '[]',
+          public_contacts JSONB NOT NULL DEFAULT '[]',
+          opportunity_score TEXT NOT NULL DEFAULT 'MEDIUM',
+          outreach_status TEXT NOT NULL DEFAULT 'DRAFTED',
+          outreach_draft TEXT NOT NULL,
+          refined_draft TEXT,
+          refinement_feedback TEXT,
+          telegram_message_id TEXT,
+          action_approved_at TIMESTAMPTZ,
+          action_sent_at TIMESTAMPTZ,
+          action_rejected_at TIMESTAMPTZ,
+          sent_channel TEXT,
+          sent_provider TEXT,
+          outreach_message_id TEXT,
+          resend_message_id TEXT,
+          recipient_email TEXT,
+          send_error_reason TEXT,
+          email_subject TEXT,
+          dispatch_attempt_id TEXT,
+          dispatch_attempt_at TIMESTAMPTZ,
+          next_follow_up_date TIMESTAMPTZ,
+          prospect_reply TEXT,
+          prospect_replied_at TIMESTAMPTZ,
+          deal_id TEXT,
+          notes TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS scout_settings (
+          id TEXT PRIMARY KEY,
+          telegram_bot_token TEXT,
+          telegram_chat_id TEXT,
+          telegram_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+          tavily_api_key TEXT,
+          tavily_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          autonomous_worker_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+          run_interval_minutes INTEGER NOT NULL DEFAULT 60,
+          target_niches JSONB NOT NULL DEFAULT '["E-commerce Brands", "Shopify Store Owners", "Course & Digital Creators"]',
+          intent_keywords JSONB NOT NULL DEFAULT '["checkout dropoff", "low conversion rate", "feedback on store", "need landing page"]',
+          ai_provider TEXT NOT NULL DEFAULT 'gemini',
+          ai_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
+          email_provider TEXT NOT NULL DEFAULT 'gmail',
+          gmail_user TEXT,
+          gmail_app_password TEXT,
+          resend_api_key TEXT,
+          resend_from_email TEXT DEFAULT 'ApexGrowth Growth Team <onboarding@resend.dev>',
+          smtp_host TEXT,
+          smtp_port INTEGER DEFAULT 465,
+          last_run_at TIMESTAMPTZ,
+          total_scouted_count INTEGER NOT NULL DEFAULT 0,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+      `);
+      // Ensure columns exist if table was already created earlier
+      await db.execute(sql`
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS tavily_api_key TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS tavily_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS ai_provider TEXT NOT NULL DEFAULT 'gemini';
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS ai_model TEXT NOT NULL DEFAULT 'gemini-2.5-flash';
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS gemini_api_key TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS groq_api_key TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS mistral_api_key TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS nvidia_api_key TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS secondary_ai_api_key TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS secondary_ai_base_url TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS ai_temperature INTEGER DEFAULT 70;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS email_provider TEXT NOT NULL DEFAULT 'gmail';
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS gmail_user TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS gmail_app_password TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS resend_api_key TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS resend_from_email TEXT DEFAULT 'ApexGrowth Growth Team <onboarding@resend.dev>';
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS smtp_host TEXT;
+        ALTER TABLE scout_settings ADD COLUMN IF NOT EXISTS smtp_port INTEGER DEFAULT 465;
+
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS sent_channel TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS sent_provider TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS outreach_message_id TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS resend_message_id TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS recipient_email TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS send_error_reason TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS email_subject TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS dispatch_attempt_id TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS dispatch_attempt_at TIMESTAMPTZ;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS next_follow_up_date TIMESTAMPTZ;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS prospect_reply TEXT;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS prospect_replied_at TIMESTAMPTZ;
+        ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS deal_id TEXT;
+      `).catch(() => {});
+      this.scoutTablesChecked = true;
+      this.useInMemoryScoutStore = false;
+    } catch {
+      this.scoutTablesChecked = true;
+      this.useInMemoryScoutStore = true;
+    }
+  }
+
+  async getScoutSettings(): Promise<ScoutSettings> {
+    await this.ensureScoutTablesExist();
+    if (this.useInMemoryScoutStore) {
+      return { ...this.inMemoryScoutSettings };
+    }
+
+    try {
+      const rows = await db.select().from(schema.scoutSettings).limit(1);
+      if (rows.length > 0) {
+        const r = rows[0];
+        return {
+          id: r.id,
+          telegramBotToken: r.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN || '',
+          telegramChatId: r.telegramChatId || process.env.TELEGRAM_CHAT_ID || '',
+          telegramEnabled: r.telegramEnabled,
+          tavilyApiKey: r.tavilyApiKey || process.env.TAVILY_API_KEY || '',
+          tavilyEnabled: r.tavilyEnabled ?? true,
+          autonomousWorkerEnabled: r.autonomousWorkerEnabled,
+          runIntervalMinutes: r.runIntervalMinutes,
+          targetNiches: (r.targetNiches as string[]) || this.inMemoryScoutSettings.targetNiches,
+          intentKeywords: (r.intentKeywords as string[]) || this.inMemoryScoutSettings.intentKeywords,
+          aiProvider: (r.aiProvider as any) || 'gemini',
+          aiModel: r.aiModel || 'gemini-2.5-flash',
+          geminiApiKey: r.geminiApiKey || process.env.GEMINI_API_KEY || '',
+          groqApiKey: r.groqApiKey || process.env.GROQ_API_KEY || '',
+          mistralApiKey: r.mistralApiKey || process.env.MISTRAL_API_KEY || '',
+          nvidiaApiKey: r.nvidiaApiKey || process.env.NVIDIA_API_KEY || '',
+          secondaryAiApiKey: r.secondaryAiApiKey || '',
+          secondaryAiBaseUrl: r.secondaryAiBaseUrl || '',
+          aiTemperature: r.aiTemperature ?? 70,
+          emailProvider: (r.emailProvider as any) || (process.env.EMAIL_OUTREACH_PROVIDER as any) || 'gmail',
+          gmailUser: r.gmailUser || process.env.GMAIL_USER || process.env.SMTP_USER || '',
+          gmailAppPassword: r.gmailAppPassword || process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || '',
+          resendApiKey: r.resendApiKey || process.env.RESEND_API_KEY || '',
+          resendFromEmail: r.resendFromEmail || process.env.RESEND_FROM_EMAIL || 'ApexGrowth Growth Team <onboarding@resend.dev>',
+          smtpHost: r.smtpHost || process.env.SMTP_HOST || 'smtp.gmail.com',
+          smtpPort: r.smtpPort || (process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465),
+          lastRunAt: r.lastRunAt ? r.lastRunAt.toISOString() : undefined,
+          totalScoutedCount: r.totalScoutedCount || 0,
+          updatedAt: r.updatedAt.toISOString(),
+        };
+      }
+
+      // Seed initial settings row
+      const initial: ScoutSettings = {
+        id: 'scout_settings_primary',
+        telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+        telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+        telegramEnabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+        tavilyApiKey: process.env.TAVILY_API_KEY || '',
+        tavilyEnabled: Boolean(process.env.TAVILY_API_KEY),
+        autonomousWorkerEnabled: true,
+        runIntervalMinutes: 60,
+        targetNiches: this.inMemoryScoutSettings.targetNiches,
+        intentKeywords: this.inMemoryScoutSettings.intentKeywords,
+        aiProvider: 'gemini',
+        aiModel: 'gemini-2.5-flash',
+        geminiApiKey: process.env.GEMINI_API_KEY || '',
+        groqApiKey: process.env.GROQ_API_KEY || '',
+        mistralApiKey: process.env.MISTRAL_API_KEY || '',
+        nvidiaApiKey: process.env.NVIDIA_API_KEY || '',
+        secondaryAiApiKey: '',
+        secondaryAiBaseUrl: '',
+        aiTemperature: 70,
+        emailProvider: (process.env.EMAIL_OUTREACH_PROVIDER as any) || 'gmail',
+        gmailUser: process.env.GMAIL_USER || process.env.SMTP_USER || '',
+        gmailAppPassword: process.env.GMAIL_APP_PASSWORD || process.env.SMTP_PASS || '',
+        resendApiKey: process.env.RESEND_API_KEY || '',
+        resendFromEmail: process.env.RESEND_FROM_EMAIL || 'ApexGrowth Growth Team <onboarding@resend.dev>',
+        smtpHost: process.env.SMTP_HOST || 'smtp.gmail.com',
+        smtpPort: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465,
+        totalScoutedCount: 0,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await db.insert(schema.scoutSettings).values({
+        id: initial.id,
+        telegramBotToken: initial.telegramBotToken,
+        telegramChatId: initial.telegramChatId,
+        telegramEnabled: initial.telegramEnabled,
+        tavilyApiKey: initial.tavilyApiKey,
+        tavilyEnabled: initial.tavilyEnabled,
+        autonomousWorkerEnabled: initial.autonomousWorkerEnabled,
+        runIntervalMinutes: initial.runIntervalMinutes,
+        targetNiches: initial.targetNiches,
+        intentKeywords: initial.intentKeywords,
+        aiProvider: initial.aiProvider || 'gemini',
+        aiModel: initial.aiModel || 'gemini-2.5-flash',
+        geminiApiKey: initial.geminiApiKey,
+        groqApiKey: initial.groqApiKey,
+        mistralApiKey: initial.mistralApiKey,
+        nvidiaApiKey: initial.nvidiaApiKey,
+        secondaryAiApiKey: initial.secondaryAiApiKey,
+        secondaryAiBaseUrl: initial.secondaryAiBaseUrl,
+        aiTemperature: initial.aiTemperature ?? 70,
+        emailProvider: initial.emailProvider || 'gmail',
+        gmailUser: initial.gmailUser,
+        gmailAppPassword: initial.gmailAppPassword,
+        resendApiKey: initial.resendApiKey,
+        resendFromEmail: initial.resendFromEmail,
+        smtpHost: initial.smtpHost,
+        smtpPort: initial.smtpPort,
+        totalScoutedCount: 0,
+      });
+
+      return initial;
+    } catch {
+      return { ...this.inMemoryScoutSettings };
+    }
+  }
+
+  async updateScoutSettings(partial: Partial<ScoutSettings>): Promise<ScoutSettings> {
+    await this.ensureScoutTablesExist();
+    const current = await this.getScoutSettings();
+    const updated: ScoutSettings = {
+      ...current,
+      ...partial,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryScoutSettings = updated;
+      return updated;
+    }
+
+    try {
+      await db
+        .insert(schema.scoutSettings)
+        .values({
+          id: updated.id,
+          telegramBotToken: updated.telegramBotToken,
+          telegramChatId: updated.telegramChatId,
+          telegramEnabled: updated.telegramEnabled,
+          tavilyApiKey: updated.tavilyApiKey,
+          tavilyEnabled: updated.tavilyEnabled,
+          autonomousWorkerEnabled: updated.autonomousWorkerEnabled,
+          runIntervalMinutes: updated.runIntervalMinutes,
+          targetNiches: updated.targetNiches,
+          intentKeywords: updated.intentKeywords,
+          aiProvider: updated.aiProvider || 'gemini',
+          aiModel: updated.aiModel || 'gemini-2.5-flash',
+          geminiApiKey: updated.geminiApiKey,
+          groqApiKey: updated.groqApiKey,
+          mistralApiKey: updated.mistralApiKey,
+          nvidiaApiKey: updated.nvidiaApiKey,
+          secondaryAiApiKey: updated.secondaryAiApiKey,
+          secondaryAiBaseUrl: updated.secondaryAiBaseUrl,
+          aiTemperature: updated.aiTemperature ?? 70,
+          emailProvider: updated.emailProvider || 'gmail',
+          gmailUser: updated.gmailUser,
+          gmailAppPassword: updated.gmailAppPassword,
+          resendApiKey: updated.resendApiKey,
+          resendFromEmail: updated.resendFromEmail,
+          smtpHost: updated.smtpHost,
+          smtpPort: updated.smtpPort,
+          lastRunAt: updated.lastRunAt ? new Date(updated.lastRunAt) : null,
+          totalScoutedCount: updated.totalScoutedCount,
+        })
+        .onConflictDoUpdate({
+          target: schema.scoutSettings.id,
+          set: {
+            telegramBotToken: updated.telegramBotToken,
+            telegramChatId: updated.telegramChatId,
+            telegramEnabled: updated.telegramEnabled,
+            tavilyApiKey: updated.tavilyApiKey,
+            tavilyEnabled: updated.tavilyEnabled,
+            autonomousWorkerEnabled: updated.autonomousWorkerEnabled,
+            runIntervalMinutes: updated.runIntervalMinutes,
+            targetNiches: updated.targetNiches,
+            intentKeywords: updated.intentKeywords,
+            aiProvider: updated.aiProvider || 'gemini',
+            aiModel: updated.aiModel || 'gemini-2.5-flash',
+            geminiApiKey: updated.geminiApiKey,
+            groqApiKey: updated.groqApiKey,
+            mistralApiKey: updated.mistralApiKey,
+            nvidiaApiKey: updated.nvidiaApiKey,
+            secondaryAiApiKey: updated.secondaryAiApiKey,
+            secondaryAiBaseUrl: updated.secondaryAiBaseUrl,
+            aiTemperature: updated.aiTemperature ?? 70,
+            emailProvider: updated.emailProvider || 'gmail',
+            gmailUser: updated.gmailUser,
+            gmailAppPassword: updated.gmailAppPassword,
+            resendApiKey: updated.resendApiKey,
+            resendFromEmail: updated.resendFromEmail,
+            smtpHost: updated.smtpHost,
+            smtpPort: updated.smtpPort,
+            lastRunAt: updated.lastRunAt ? new Date(updated.lastRunAt) : null,
+            totalScoutedCount: updated.totalScoutedCount,
+            updatedAt: new Date(),
+          },
+        });
+      return updated;
+    } catch {
+      this.inMemoryScoutSettings = updated;
+      return updated;
+    }
+  }
+
+  async getExistingOpportunitySourceUrls(): Promise<Set<string>> {
+    await this.ensureScoutTablesExist();
+    const urls = new Set<string>();
+
+    if (this.useInMemoryScoutStore) {
+      for (const opp of this.inMemoryOpportunities.values()) {
+        urls.add(opp.sourceUrl);
+      }
+      return urls;
+    }
+
+    try {
+      const rows = await db.select({ sourceUrl: schema.opportunities.sourceUrl }).from(schema.opportunities);
+      for (const r of rows) {
+        if (r.sourceUrl) urls.add(r.sourceUrl);
+      }
+    } catch {
+      for (const opp of this.inMemoryOpportunities.values()) {
+        urls.add(opp.sourceUrl);
+      }
+    }
+    return urls;
+  }
+
+  async createOpportunity(opp: Opportunity): Promise<Opportunity> {
+    await this.ensureScoutTablesExist();
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(opp.id, opp);
+      return opp;
+    }
+
+    try {
+      await db.insert(schema.opportunities).values({
+        id: opp.id,
+        title: opp.title,
+        prospectName: opp.prospectName,
+        businessName: opp.businessName,
+        websiteUrl: opp.websiteUrl || null,
+        niche: opp.niche,
+        sourcePlatform: opp.sourcePlatform,
+        sourceUrl: opp.sourceUrl,
+        sourcePostExcerpt: opp.sourcePostExcerpt || null,
+        relevanceSummary: opp.relevanceSummary,
+        evidence: opp.evidence as any,
+        publicContacts: opp.publicContacts as any,
+        opportunityScore: opp.opportunityScore,
+        outreachStatus: opp.outreachStatus,
+        outreachDraft: opp.outreachDraft,
+        refinedDraft: opp.refinedDraft || null,
+        refinementFeedback: opp.refinementFeedback || null,
+        telegramMessageId: opp.telegramMessageId || null,
+        actionApprovedAt: opp.actionApprovedAt ? new Date(opp.actionApprovedAt) : null,
+        actionSentAt: opp.actionSentAt ? new Date(opp.actionSentAt) : null,
+        actionRejectedAt: opp.actionRejectedAt ? new Date(opp.actionRejectedAt) : null,
+        notes: opp.notes || null,
+      });
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(opp.id, opp);
+      return opp;
+    }
+  }
+
+  async getOpportunities(filter?: { status?: string; score?: string; limit?: number }): Promise<Opportunity[]> {
+    await this.ensureScoutTablesExist();
+
+    if (this.useInMemoryScoutStore) {
+      let list = Array.from(this.inMemoryOpportunities.values());
+      if (filter?.status) {
+        list = list.filter((o) => o.outreachStatus === filter.status);
+      }
+      if (filter?.score) {
+        list = list.filter((o) => o.opportunityScore === filter.score);
+      }
+      list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      if (filter?.limit) {
+        list = list.slice(0, filter.limit);
+      }
+      return list;
+    }
+
+    try {
+      let query = db.select().from(schema.opportunities).orderBy(desc(schema.opportunities.createdAt));
+      const rows = await query;
+      let mapped: Opportunity[] = rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        prospectName: r.prospectName,
+        businessName: r.businessName,
+        websiteUrl: r.websiteUrl || undefined,
+        niche: r.niche,
+        sourcePlatform: r.sourcePlatform as any,
+        sourceUrl: r.sourceUrl,
+        sourcePostExcerpt: r.sourcePostExcerpt || undefined,
+        relevanceSummary: r.relevanceSummary,
+        evidence: (r.evidence as any) || [],
+        publicContacts: (r.publicContacts as any) || [],
+        opportunityScore: r.opportunityScore as any,
+        outreachStatus: r.outreachStatus as any,
+        outreachDraft: r.outreachDraft,
+        refinedDraft: r.refinedDraft || undefined,
+        refinementFeedback: r.refinementFeedback || undefined,
+        telegramMessageId: r.telegramMessageId || undefined,
+        actionApprovedAt: r.actionApprovedAt ? r.actionApprovedAt.toISOString() : undefined,
+        actionSentAt: r.actionSentAt ? r.actionSentAt.toISOString() : undefined,
+        actionRejectedAt: r.actionRejectedAt ? r.actionRejectedAt.toISOString() : undefined,
+        sentChannel: r.sentChannel || undefined,
+        sentProvider: (r.sentProvider as any) || undefined,
+        outreachMessageId: r.outreachMessageId || undefined,
+        resendMessageId: r.resendMessageId || undefined,
+        recipientEmail: r.recipientEmail || undefined,
+        sendErrorReason: r.sendErrorReason || undefined,
+        emailSubject: r.emailSubject || undefined,
+        dispatchAttemptId: r.dispatchAttemptId || undefined,
+        dispatchAttemptAt: r.dispatchAttemptAt ? r.dispatchAttemptAt.toISOString() : undefined,
+        nextFollowUpDate: r.nextFollowUpDate ? r.nextFollowUpDate.toISOString() : undefined,
+        prospectReply: r.prospectReply || undefined,
+        prospectRepliedAt: r.prospectRepliedAt ? r.prospectRepliedAt.toISOString() : undefined,
+        dealId: r.dealId || undefined,
+        notes: r.notes || undefined,
+        createdAt: r.createdAt.toISOString(),
+        updatedAt: r.updatedAt.toISOString(),
+      }));
+
+      if (filter?.status) {
+        mapped = mapped.filter((o) => o.outreachStatus === filter.status);
+      }
+      if (filter?.score) {
+        mapped = mapped.filter((o) => o.opportunityScore === filter.score);
+      }
+      if (filter?.limit) {
+        mapped = mapped.slice(0, filter.limit);
+      }
+
+      return mapped;
+    } catch {
+      let res = Array.from(this.inMemoryOpportunities.values());
+      if (filter?.limit) res = res.slice(0, filter.limit);
+      return res;
+    }
+  }
+
+  async getOpportunityById(id: string): Promise<Opportunity | null> {
+    await this.ensureScoutTablesExist();
+
+    if (this.useInMemoryScoutStore) {
+      return this.inMemoryOpportunities.get(id) || null;
+    }
+
+    try {
+      const rows = await db.select().from(schema.opportunities).where(eq(schema.opportunities.id, id)).limit(1);
+      if (rows.length === 0) return null;
+      const r = rows[0];
+      return {
+        id: r.id,
+        title: r.title,
+        prospectName: r.prospectName,
+        businessName: r.businessName,
+        websiteUrl: r.websiteUrl || undefined,
+        niche: r.niche,
+        sourcePlatform: r.sourcePlatform as any,
+        sourceUrl: r.sourceUrl,
+        sourcePostExcerpt: r.sourcePostExcerpt || undefined,
+        relevanceSummary: r.relevanceSummary,
+        evidence: (r.evidence as any) || [],
+        publicContacts: (r.publicContacts as any) || [],
+        opportunityScore: r.opportunityScore as any,
+        outreachStatus: r.outreachStatus as any,
+        outreachDraft: r.outreachDraft,
+        refinedDraft: r.refinedDraft || undefined,
+        refinementFeedback: r.refinementFeedback || undefined,
+        telegramMessageId: r.telegramMessageId || undefined,
+        actionApprovedAt: r.actionApprovedAt ? r.actionApprovedAt.toISOString() : undefined,
+        actionSentAt: r.actionSentAt ? r.actionSentAt.toISOString() : undefined,
+        actionRejectedAt: r.actionRejectedAt ? r.actionRejectedAt.toISOString() : undefined,
+        notes: r.notes || undefined,
+        createdAt: r.createdAt.toISOString(),
+        updatedAt: r.updatedAt.toISOString(),
+      };
+    } catch {
+      return this.inMemoryOpportunities.get(id) || null;
+    }
+  }
+
+  async findOpportunityByTelegramMessageId(messageId: string): Promise<Opportunity | null> {
+    await this.ensureScoutTablesExist();
+
+    if (this.useInMemoryScoutStore) {
+      for (const opp of this.inMemoryOpportunities.values()) {
+        if (opp.telegramMessageId === messageId) return opp;
+      }
+      return null;
+    }
+
+    try {
+      const rows = await db
+        .select()
+        .from(schema.opportunities)
+        .where(eq(schema.opportunities.telegramMessageId, messageId))
+        .limit(1);
+      if (rows.length === 0) return null;
+      return this.getOpportunityById(rows[0].id);
+    } catch {
+      for (const opp of this.inMemoryOpportunities.values()) {
+        if (opp.telegramMessageId === messageId) return opp;
+      }
+      return null;
+    }
+  }
+
+  async updateOpportunityStatus(
+    id: string,
+    status: 'DRAFTED' | 'REFINED' | 'APPROVED' | 'SENT' | 'REJECTED'
+  ): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) throw new Error(`Opportunity #${id} not found`);
+
+    const now = new Date().toISOString();
+    opp.outreachStatus = status;
+    opp.updatedAt = now;
+    if (status === 'APPROVED') opp.actionApprovedAt = now;
+    if (status === 'SENT') opp.actionSentAt = now;
+    if (status === 'REJECTED') opp.actionRejectedAt = now;
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          outreachStatus: status,
+          actionApprovedAt: opp.actionApprovedAt ? new Date(opp.actionApprovedAt) : null,
+          actionSentAt: opp.actionSentAt ? new Date(opp.actionSentAt) : null,
+          actionRejectedAt: opp.actionRejectedAt ? new Date(opp.actionRejectedAt) : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, id));
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+  }
+
+  async updateOpportunityTelegramMessageId(id: string, messageId: string): Promise<void> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) return;
+
+    opp.telegramMessageId = messageId;
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({ telegramMessageId: messageId, updatedAt: new Date() })
+        .where(eq(schema.opportunities.id, id));
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+    }
+  }
+
+  async updateOpportunityRefinedDraft(
+    id: string,
+    refinedDraft: string,
+    feedback: string
+  ): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) throw new Error(`Opportunity #${id} not found`);
+
+    const now = new Date().toISOString();
+    opp.refinedDraft = refinedDraft;
+    opp.refinementFeedback = feedback;
+    opp.outreachStatus = 'REFINED';
+    opp.updatedAt = now;
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          refinedDraft,
+          refinementFeedback: feedback,
+          outreachStatus: 'REFINED',
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, id));
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+  }
+
+  async markOpportunityApproved(id: string): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) throw new Error(`Opportunity #${id} not found`);
+
+    const now = new Date().toISOString();
+    opp.outreachStatus = 'APPROVED';
+    opp.actionApprovedAt = now;
+    opp.updatedAt = now;
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          outreachStatus: 'APPROVED',
+          actionApprovedAt: new Date(now),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, id));
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+  }
+
+  async markOpportunityDispatching(id: string, attemptId: string, recipientEmail?: string): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) throw new Error(`Opportunity #${id} not found`);
+
+    const now = new Date().toISOString();
+    opp.outreachStatus = 'DISPATCHING';
+    opp.dispatchAttemptId = attemptId;
+    opp.dispatchAttemptAt = now;
+    if (recipientEmail) opp.recipientEmail = recipientEmail;
+    opp.updatedAt = now;
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          outreachStatus: 'DISPATCHING',
+          dispatchAttemptId: attemptId,
+          dispatchAttemptAt: new Date(now),
+          recipientEmail: opp.recipientEmail || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, id));
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+  }
+
+  async markOpportunitySent(
+    id: string,
+    details: {
+      messageId?: string;
+      resendId?: string;
+      provider?: string;
+      recipientEmail?: string;
+      subject?: string;
+      channel?: string;
+      nextFollowUpDate?: string;
+    }
+  ): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) throw new Error(`Opportunity #${id} not found`);
+
+    const now = new Date().toISOString();
+    opp.outreachStatus = 'SENT';
+    opp.actionSentAt = now;
+    opp.sentChannel = details.channel || 'Email';
+    opp.sentProvider = (details.provider as any) || 'Gmail';
+    if (details.messageId) opp.outreachMessageId = details.messageId;
+    if (details.resendId) opp.resendMessageId = details.resendId;
+    if (details.recipientEmail) opp.recipientEmail = details.recipientEmail;
+    if (details.subject) opp.emailSubject = details.subject;
+    opp.sendErrorReason = undefined;
+
+    if (!details.nextFollowUpDate) {
+      const followUp = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000);
+      opp.nextFollowUpDate = followUp.toISOString();
+    } else {
+      opp.nextFollowUpDate = details.nextFollowUpDate;
+    }
+    opp.updatedAt = now;
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          outreachStatus: 'SENT',
+          actionSentAt: new Date(now),
+          sentChannel: opp.sentChannel,
+          sentProvider: opp.sentProvider,
+          outreachMessageId: opp.outreachMessageId || details.messageId || null,
+          resendMessageId: opp.resendMessageId || details.resendId || null,
+          recipientEmail: opp.recipientEmail || null,
+          emailSubject: opp.emailSubject || null,
+          sendErrorReason: null,
+          nextFollowUpDate: opp.nextFollowUpDate ? new Date(opp.nextFollowUpDate) : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, id));
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+  }
+
+  async markOpportunitySendFailed(
+    id: string,
+    reason: string,
+    recipientEmail?: string
+  ): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) throw new Error(`Opportunity #${id} not found`);
+
+    const now = new Date().toISOString();
+    opp.outreachStatus = 'SEND_FAILED';
+    opp.sendErrorReason = reason;
+    if (recipientEmail) opp.recipientEmail = recipientEmail;
+    opp.updatedAt = now;
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          outreachStatus: 'SEND_FAILED',
+          sendErrorReason: reason,
+          recipientEmail: opp.recipientEmail || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, id));
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+  }
+
+  async updateOpportunitySent(
+    id: string,
+    channel?: string,
+    nextFollowUpDate?: string
+  ): Promise<Opportunity> {
+    return this.markOpportunitySent(id, { channel, nextFollowUpDate });
+  }
+
+  async recordProspectReply(
+    id: string,
+    replyText: string
+  ): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(id);
+    if (!opp) throw new Error(`Opportunity #${id} not found`);
+
+    const now = new Date().toISOString();
+    opp.outreachStatus = 'REPLIED';
+    opp.prospectReply = replyText;
+    opp.prospectRepliedAt = now;
+    opp.updatedAt = now;
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          outreachStatus: 'REPLIED',
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, id));
+      return opp;
+    } catch {
+      this.inMemoryOpportunities.set(id, opp);
+      return opp;
+    }
+  }
+
+  async getScoutStats(): Promise<{ total: number; drafted: number; approved: number; sent: number; rejected: number }> {
+    const all = await this.getOpportunities();
+    return {
+      total: all.length,
+      drafted: all.filter((o) => o.outreachStatus === 'DRAFTED' || o.outreachStatus === 'REFINED').length,
+      approved: all.filter((o) => o.outreachStatus === 'APPROVED').length,
+      sent: all.filter((o) => o.outreachStatus === 'SENT').length,
+      rejected: all.filter((o) => o.outreachStatus === 'REJECTED').length,
+    };
+  }
 }
 
 export const dbService = new DatabaseService();
+

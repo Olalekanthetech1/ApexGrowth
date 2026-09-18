@@ -15,10 +15,11 @@ export function PricingSection({ onNavigate }: PricingSectionProps = {}) {
 
   const handleCtaClick = (pkg: PricingPackage) => {
     if (pkg.ctaAction === 'checkout_demo') {
-      const demoSection = document.querySelector('#demos');
-      const switchCheckoutBtn = document.querySelector('#switch-demo-checkout-tab') as HTMLButtonElement;
-      if (switchCheckoutBtn) switchCheckoutBtn.click();
-      if (demoSection) demoSection.scrollIntoView({ behavior: 'smooth' });
+      if (onNavigate) {
+        onNavigate(`/checkout/${pkg.slug}`);
+      } else {
+        window.location.hash = `/checkout/${pkg.slug}`;
+      }
     } else if (pkg.ctaAction === 'whatsapp' && contact.whatsappUrl) {
       const msg = `Hi ApexGrowth, I'd like to order the ${pkg.name} package ($${pkg.promoPriceUsd || pkg.priceUsd} USD).`;
       window.open(`${contact.whatsappUrl}?text=${encodeURIComponent(msg)}`, '_blank');
@@ -30,9 +31,12 @@ export function PricingSection({ onNavigate }: PricingSectionProps = {}) {
         if (auditEl) auditEl.scrollIntoView({ behavior: 'smooth' });
       }
     } else {
-      // Default: Open direct USD checkout modal
-      setSelectedPkgForCheckout(pkg);
-      setIsCheckoutOpen(true);
+      // Default: Navigate to direct standalone USD checkout page
+      if (onNavigate) {
+        onNavigate(`/checkout/${pkg.slug}`);
+      } else {
+        window.location.hash = `/checkout/${pkg.slug}`;
+      }
     }
   };
 

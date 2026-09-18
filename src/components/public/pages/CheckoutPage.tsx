@@ -38,8 +38,8 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
   // Active sub-panels and state within accordions
   const [bankCurrencyTab, setBankCurrencyTab] = useState<'USD' | 'GBP' | 'EUR'>('USD');
   const [wireReference, setWireReference] = useState('');
-  const [cryptoCoin, setCryptoCoin] = useState<'USDT' | 'BTC' | 'TRX' | 'ETH' | 'SOL' | 'LTC' | 'BNB' | 'USDC'>('USDT');
-  const [cryptoNetwork, setCryptoNetwork] = useState<'TRC20' | 'ERC20' | 'BEP20' | 'SOL'>('TRC20');
+  const [cryptoCoin, setCryptoCoin] = useState<'USDT' | 'BTC' | 'ETH' | 'USDC'>('USDT');
+  const [cryptoNetwork, setCryptoNetwork] = useState<'TRC20' | 'ERC20' | 'BEP20' | 'SOL' | 'Bitcoin'>('TRC20');
   const [cryptoTxHash, setCryptoTxHash] = useState('');
   const [verifyRefInput, setVerifyRefInput] = useState('');
   const [isVerifyInputOpen, setIsVerifyInputOpen] = useState(false);
@@ -54,6 +54,7 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
   const [completedOrder, setCompletedOrder] = useState<any | null>(null);
   const [copiedRef, setCopiedRef] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [sessionOrderCode] = useState(() => `APX-${Math.random().toString(36).substring(2, 7).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`);
 
   // Initialize selected package
   useEffect(() => {
@@ -112,104 +113,97 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
   const activePackage = pricing.find((p) => p.id === selectedPkgId) || pricing[0];
   const activePaymentMethod = paymentMethods.find((pm) => pm.id === selectedPaymentMethodId) || paymentMethods[0];
 
-  const payablePrice = activePackage ? (activePackage.promoPriceUsd || activePackage.priceUsd) : 0;
+  const rawPrice = activePackage ? (activePackage.promoPriceUsd || activePackage.priceUsd) : '0';
+  const payablePrice = typeof rawPrice === 'number' ? rawPrice : parseFloat(String(rawPrice).replace(/[^0-9.]/g, '')) || 0;
 
   // Crypto conversion rates
-  const getCryptoAmount = (usd: number, coin: string) => {
+  const getCryptoAmount = (usdInput: number | string, coin: string) => {
+    const usd = typeof usdInput === 'number' ? usdInput : parseFloat(String(usdInput).replace(/[^0-9.]/g, '')) || 0;
     switch (coin) {
       case 'USDT':
       case 'USDC':
         return usd.toFixed(2);
       case 'BTC':
         return (usd / 59102).toFixed(6);
-      case 'TRX':
-        return (usd / 0.154).toFixed(1);
       case 'ETH':
         return (usd / 2512).toFixed(5);
-      case 'SOL':
-        return (usd / 138.5).toFixed(4);
-      case 'LTC':
-        return (usd / 64.2).toFixed(3);
-      case 'BNB':
-        return (usd / 532).toFixed(4);
       default:
         return usd.toFixed(2);
     }
   };
 
-  // Safe fallback configurations
+  // Real Database-driven Bank Wire Details
   const getBankWireDetails = () => {
-    const customConfig = activePaymentMethod?.configMetadata;
+    const greyMethod = paymentMethods.find((pm) => pm.provider === 'grey') || activePaymentMethod;
+    const customConfig = greyMethod?.configMetadata;
     const key = bankCurrencyTab.toLowerCase();
     
-    // Check if customized in database
-    if (customConfig && customConfig[key] && customConfig[key].beneficiary) {
-      return {
-        beneficiary: customConfig[key].beneficiary,
-        bankName: customConfig[key].bankName,
-        accountNumber: customConfig[key].accountNumber,
-        accountType: customConfig[key].accountType || 'Checking',
-        routingNumber: customConfig[key].routingNumber,
-        bankAddress: customConfig[key].bankAddress,
-      };
+    if (customConfig && customConfig[key]) {
+      const data = customConfig[key];
+      const hasAccount = data.accountNumber && data.accountNumber.trim() !== '';
+      const hasBeneficiary = data.beneficiary && data.beneficiary.trim() !== '';
+      const isEnabled = customConfig[`${key}Enabled`] !== false;
+      if ((hasAccount || hasBeneficiary) && isEnabled) {
+        return {
+          isConfigured: true,
+          beneficiary: data.beneficiary || '',
+          bankName: data.bankName || '',
+          accountNumber: data.accountNumber || '',
+          accountType: data.accountType || (bankCurrencyTab === 'USD' ? 'Checking' : 'Business Account'),
+          routingNumber: data.routingNumber || '',
+          bankAddress: data.bankAddress || '',
+        };
+      }
     }
 
-    // High quality fallbacks matching screenshot structure
-    if (bankCurrencyTab === 'GBP') {
-      return {
-        beneficiary: 'ApexGrowth Digital Ltd.',
-        bankName: 'Clear Junction Bank',
-        accountType: 'Business Account',
-        routingNumber: '04-00-04', // Sort Code
-        accountNumber: '98765432',
-        bankAddress: '1st Floor, 25 Farringdon St, London, EC4A 4AB, UK',
-      };
-    } else if (bankCurrencyTab === 'EUR') {
-      return {
-        beneficiary: 'ApexGrowth Digital Ltd.',
-        bankName: 'Clear Junction Bank',
-        accountType: 'Business Account',
-        routingNumber: 'CJUNGB2LXXX', // BIC/SWIFT
-        accountNumber: 'GB12CJUN04000498765432', // IBAN
-        bankAddress: '1st Floor, 25 Farringdon St, London, EC4A 4AB, UK',
-      };
-    } else {
-      return {
-        beneficiary: 'ApexGrowth Digital Ltd.',
-        bankName: 'Lead Bank',
-        accountType: 'Checking',
-        routingNumber: '101019644',
-        accountNumber: '218146795820',
-        bankAddress: '1801 Main St., Kansas City, MO 64108, USA',
-      };
-    }
+    return {
+      isConfigured: false,
+      beneficiary: '',
+      bankName: '',
+      accountNumber: '',
+      accountType: '',
+      routingNumber: '',
+      bankAddress: '',
+    };
+  };
+
+  const getPaystackConfig = () => {
+    const paystackMethod = paymentMethods.find((pm) => pm.provider === 'paystack');
+    const metadata = (paystackMethod?.configMetadata as any) || {};
+    const hasKeys = (metadata.publicKey && metadata.publicKey.trim() !== '') || (metadata.secretKey && metadata.secretKey.trim() !== '');
+    return {
+      isConfigured: !!hasKeys,
+      isActive: paystackMethod ? paystackMethod.active !== false : true,
+      publicKey: metadata.publicKey || '',
+    };
   };
 
   const getCryptoWalletAddress = () => {
     const customConfig = activePaymentMethod?.configMetadata;
-    if (customConfig && customConfig.addresses && customConfig.addresses[cryptoCoin]) {
-      return customConfig.addresses[cryptoCoin];
+    if (!customConfig || !customConfig.addresses) return '';
+    
+    const coinKey = cryptoCoin.toLowerCase();
+    const configItem = customConfig.addresses[coinKey];
+    if (configItem) {
+      const addr = typeof configItem === 'object' ? configItem.address : configItem;
+      if (addr && addr.trim() !== '') {
+        return addr.trim();
+      }
     }
+    return '';
+  };
 
-    // Realistic secure default wallet addresses
-    switch (cryptoCoin) {
-      case 'BTC':
-        return '3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy';
-      case 'ETH':
-        return '0x71C7656EC7ab88b098defB751B7401B5f6d8976F';
-      case 'SOL':
-        return 'HN7cABmrH77V6j91C9B9P2C8zQ9x7pC7s8BvA1B2C3';
-      case 'TRX':
-        return 'TY7hS2D1q4K9J8e3u6x5wYt9RzL6pBv8qS';
-      case 'USDT':
-      case 'USDC':
-        if (cryptoNetwork === 'ERC20') return '0x71C7656EC7ab88b098defB751B7401B5f6d8976F';
-        if (cryptoNetwork === 'BEP20') return '0x71C7656EC7ab88b098defB751B7401B5f6d8976F';
-        if (cryptoNetwork === 'SOL') return 'HN7cABmrH77V6j91C9B9P2C8zQ9x7pC7s8BvA1B2C3';
-        return 'TY7hS2D1q4K9J8e3u6x5wYt9RzL6pBv8qS'; // TRC20 default
-      default:
-        return 'TY7hS2D1q4K9J8e3u6x5wYt9RzL6pBv8qS';
+  const getCryptoNetworkLabel = () => {
+    const customConfig = activePaymentMethod?.configMetadata;
+    if (!customConfig || !customConfig.addresses) return 'Not Configured';
+    const coinKey = cryptoCoin.toLowerCase();
+    const configItem = customConfig.addresses[coinKey];
+    if (configItem && typeof configItem === 'object' && configItem.network) {
+      return configItem.network;
     }
+    if (cryptoCoin === 'BTC') return 'Bitcoin';
+    if (cryptoCoin === 'ETH') return 'ERC20 (Ethereum)';
+    return 'TRC20';
   };
 
   // Helper payment submissions
@@ -573,6 +567,7 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
                 {(() => {
                   const method = paymentMethods.find((pm) => pm.provider === 'paystack') || paymentMethods[0];
                   const isSelected = selectedPaymentMethodId === method?.id;
+                  const paystackConfig = getPaystackConfig();
                   
                   return (
                     <div 
@@ -607,43 +602,60 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
                       {/* Expanded Panel */}
                       {isSelected && (
                         <div className="p-6 border-t border-slate-900 bg-slate-950/40 space-y-6 animate-fade-in">
-                          {/* Inside Blue Banner */}
-                          <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-xs text-slate-300 flex items-start gap-3">
-                            <CreditCard className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                            <div>
-                              <span className="font-bold text-white block mb-0.5">Credit / Debit Card &amp; Apple Pay</span>
-                              Pay securely with any Visa, Mastercard, American Express, Apple Pay, or regional Bank Transfer options instantly via Paystack.
+                          {!paystackConfig.isConfigured ? (
+                            <div className="p-5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300 space-y-2 text-center sm:text-left">
+                              <div className="flex items-center gap-2 font-bold text-amber-400 justify-center sm:justify-start">
+                                <AlertCircle className="w-4 h-4 shrink-0" />
+                                <span>Paystack Gateway Configuration Required</span>
+                              </div>
+                              <p className="leading-relaxed">
+                                The merchant has not configured their Paystack API keys yet in the Admin Dashboard.
+                              </p>
+                              <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-900">
+                                💡 <strong>Admin Checklist:</strong> Go to Admin Dashboard &gt; Payment Methods &gt; Paystack Gateway to configure your Public Key and Secret Key.
+                              </p>
                             </div>
-                          </div>
+                          ) : (
+                            <>
+                              {/* Inside Blue Banner */}
+                              <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-xs text-slate-300 flex items-start gap-3">
+                                <CreditCard className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                                <div>
+                                  <span className="font-bold text-white block mb-0.5">Credit / Debit Card &amp; Apple Pay</span>
+                                  Pay securely with any Visa, Mastercard, American Express, Apple Pay, or regional Bank Transfer options instantly via Paystack.
+                                </div>
+                              </div>
 
-                          {/* Line breakdown */}
-                          <div className="p-4 rounded-xl bg-slate-950 border border-slate-900 space-y-2.5">
-                            <div className="flex justify-between text-xs text-slate-400">
-                              <span>Package Price:</span>
-                              <span className="font-mono text-white font-bold">${payablePrice} USD</span>
-                            </div>
-                            <div className="flex justify-between text-xs border-t border-slate-900/60 pt-2.5">
-                              <span className="font-bold text-slate-300">Payable Total:</span>
-                              <span className="font-mono text-base font-extrabold text-emerald-400">${payablePrice} USD</span>
-                            </div>
-                          </div>
+                              {/* Line breakdown */}
+                              <div className="p-4 rounded-xl bg-slate-950 border border-slate-900 space-y-2.5">
+                                <div className="flex justify-between text-xs text-slate-400">
+                                  <span>Package Price:</span>
+                                  <span className="font-mono text-white font-bold">${payablePrice} USD</span>
+                                </div>
+                                <div className="flex justify-between text-xs border-t border-slate-900/60 pt-2.5">
+                                  <span className="font-bold text-slate-300">Payable Total:</span>
+                                  <span className="font-mono text-base font-extrabold text-emerald-400">${payablePrice} USD</span>
+                                </div>
+                              </div>
 
-                          {/* Trigger pay button */}
-                          <button
-                            id="btn-paystack-submit"
-                            onClick={(e) => handleCheckoutSubmit(e)}
-                            disabled={isSubmitting}
-                            className="w-full py-4 rounded-xl bg-[#06b6d4] hover:bg-[#0891b2] text-slate-950 font-extrabold text-sm shadow-lg shadow-cyan-500/10 flex items-center justify-center gap-2 transition-all cursor-pointer"
-                          >
-                            {isSubmitting ? (
-                              <div className="w-5 h-5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <>
-                                <CreditCard className="w-4 h-4" />
-                                <span>Pay ${payablePrice} with Card</span>
-                              </>
-                            )}
-                          </button>
+                              {/* Trigger pay button */}
+                              <button
+                                id="btn-paystack-submit"
+                                onClick={(e) => handleCheckoutSubmit(e)}
+                                disabled={isSubmitting}
+                                className="w-full py-4 rounded-xl bg-[#06b6d4] hover:bg-[#0891b2] text-slate-950 font-extrabold text-sm shadow-lg shadow-cyan-500/10 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                              >
+                                {isSubmitting ? (
+                                  <div className="w-5 h-5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <>
+                                    <CreditCard className="w-4 h-4" />
+                                    <span>Pay ${payablePrice} with Card</span>
+                                  </>
+                                )}
+                              </button>
+                            </>
+                          )}
 
                           {/* Already Paid Toggle */}
                           <div className="border-t border-slate-900/80 pt-4">
@@ -748,7 +760,7 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
                               1. Select Cryptocurrency
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                              {(['USDT', 'BTC', 'TRX', 'ETH', 'SOL', 'LTC', 'BNB', 'USDC'] as const).map((coin) => {
+                              {(['USDT', 'USDC', 'BTC', 'ETH'] as const).map((coin) => {
                                 const activeCoin = cryptoCoin === coin;
                                 const equivalent = getCryptoAmount(payablePrice, coin);
                                 return (
@@ -758,11 +770,6 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
                                     key={coin}
                                     onClick={() => {
                                       setCryptoCoin(coin);
-                                      // Auto adjust matching network defaults
-                                      if (coin === 'BTC') setCryptoNetwork('TRC20'); // placeholder for direct
-                                      else if (coin === 'SOL') setCryptoNetwork('SOL');
-                                      else if (coin === 'TRX') setCryptoNetwork('TRC20');
-                                      else setCryptoNetwork('TRC20');
                                     }}
                                     className={`p-2.5 rounded-xl border text-center transition-all ${
                                       activeCoin
@@ -778,99 +785,94 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
                             </div>
                           </div>
 
-                          {/* 2. Network selection */}
+                          {/* 2. Dynamic Network display */}
                           <div>
                             <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-2.5">
-                              2. Select Transfer Network
+                              2. Configured Transfer Network
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                              {[
-                                { id: 'TRC20', label: 'TRON (TRC20) - Low Fee & Fast' },
-                                { id: 'BEP20', label: 'BNB Smart Chain (BEP20)' },
-                                { id: 'ERC20', label: 'Ethereum (ERC20)' },
-                                { id: 'SOL', label: 'Solana (SOL)' }
-                              ].map((net) => {
-                                const isNetSelected = cryptoNetwork === net.id;
-                                return (
-                                  <button
-                                    id={`btn-crypto-net-${net.id.toLowerCase()}`}
-                                    type="button"
-                                    key={net.id}
-                                    onClick={() => setCryptoNetwork(net.id as any)}
-                                    className={`px-3 py-2 rounded-lg border text-xs font-bold transition-all flex items-center gap-1.5 ${
-                                      isNetSelected
-                                        ? 'bg-emerald-500/10 border-emerald-500 text-white shadow-md'
-                                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-800'
-                                    }`}
-                                  >
-                                    <span>{net.label}</span>
-                                    {isNetSelected && <Check className="w-3.5 h-3.5 text-emerald-400" />}
-                                  </button>
-                                );
-                              })}
+                            <div className="inline-flex px-3 py-2 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs font-bold text-white items-center gap-1.5">
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>{getCryptoNetworkLabel()}</span>
                             </div>
                           </div>
 
                           {/* Active deposit panel */}
                           <div className="p-5 rounded-2xl bg-slate-950 border border-slate-900 space-y-5">
-                            {/* Session Timer Banner */}
-                            <div className="flex items-center justify-between bg-amber-500/5 border border-amber-500/20 rounded-xl px-4 py-2.5">
-                              <span className="text-[10px] text-amber-400 font-bold flex items-center gap-1.5">
-                                <Clock className="w-3.5 h-3.5 animate-pulse" />
-                                <span>Payment Deposit Session Active</span>
-                              </span>
-                              <span className="font-mono text-xs font-black text-amber-400">Expires in {formatTime(timeLeft)}</span>
-                            </div>
-
-                            {/* QR Code and Address */}
-                            <div className="flex flex-col sm:flex-row items-center gap-6 pt-2">
-                              <div className="p-3 bg-white rounded-2xl flex items-center justify-center shrink-0 border border-slate-200">
-                                <img
-                                  src={`https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${encodeURIComponent(getCryptoWalletAddress())}`}
-                                  alt="Deposit Wallet QR Address"
-                                  className="w-[120px] h-[120px]"
-                                  referrerPolicy="no-referrer"
-                                />
+                            {!getCryptoWalletAddress() ? (
+                              <div className="p-5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300 space-y-2 text-center sm:text-left">
+                                <div className="flex items-center gap-2 font-bold text-amber-400 justify-center sm:justify-start">
+                                  <AlertCircle className="w-4 h-4 shrink-0" />
+                                  <span>Receiving Wallet Address Required</span>
+                                </div>
+                                <p className="leading-relaxed">
+                                  The merchant has not configured their receiving wallet address for <strong>{cryptoCoin}</strong> yet in the Admin Dashboard.
+                                </p>
+                                <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-900">
+                                  💡 <strong>Admin Checklist:</strong> Go to Admin Dashboard &gt; Payment Methods &gt; Crypto Settings to configure your recipient address.
+                                </p>
                               </div>
-                              
-                              <div className="flex-1 space-y-4 w-full">
-                                {/* Exact Amount */}
-                                <div>
-                                  <span className="text-[10px] text-slate-400 block mb-1 uppercase tracking-wider font-bold">Exact Amount to Send:</span>
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-mono text-lg font-black text-white">{getCryptoAmount(payablePrice, cryptoCoin)} {cryptoCoin}</span>
-                                    <button
-                                      id="btn-copy-crypto-amount"
-                                      type="button"
-                                      onClick={() => copyToClipboard(getCryptoAmount(payablePrice, cryptoCoin), 'crypto-amount')}
-                                      className="p-1 rounded hover:bg-slate-900 text-slate-400 hover:text-white transition-all"
-                                      title="Copy Amount"
-                                    >
-                                      {copiedField === 'crypto-amount' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                                    </button>
-                                  </div>
+                            ) : (
+                              <>
+                                {/* Session Timer Banner */}
+                                <div className="flex items-center justify-between bg-amber-500/5 border border-amber-500/20 rounded-xl px-4 py-2.5">
+                                  <span className="text-[10px] text-amber-400 font-bold flex items-center gap-1.5">
+                                    <Clock className="w-3.5 h-3.5 animate-pulse" />
+                                    <span>Payment Deposit Session Active</span>
+                                  </span>
+                                  <span className="font-mono text-xs font-black text-amber-400">Expires in {formatTime(timeLeft)}</span>
                                 </div>
 
-                                {/* Wallet Address */}
-                                <div>
-                                  <span className="text-[10px] text-slate-400 block mb-1 uppercase tracking-wider font-bold">Recipient Wallet Address ({cryptoNetwork}):</span>
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-mono text-xs text-slate-300 bg-slate-900/60 py-1.5 px-3 rounded-lg border border-slate-800 break-all flex-1">
-                                      {getCryptoWalletAddress()}
-                                    </span>
-                                    <button
-                                      id="btn-copy-crypto-addr"
-                                      type="button"
-                                      onClick={() => copyToClipboard(getCryptoWalletAddress(), 'crypto-address')}
-                                      className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-all"
-                                      title="Copy Address"
-                                    >
-                                      {copiedField === 'crypto-address' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                                    </button>
+                                {/* QR Code and Address */}
+                                <div className="flex flex-col sm:flex-row items-center gap-6 pt-2">
+                                  <div className="p-3 bg-white rounded-2xl flex items-center justify-center shrink-0 border border-slate-200">
+                                    <img
+                                      src={`https://api.qrserver.com/v1/create-qr-code/?size=130x130&data=${encodeURIComponent(getCryptoWalletAddress())}`}
+                                      alt="Deposit Wallet QR Address"
+                                      className="w-[120px] h-[120px]"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  </div>
+                                  
+                                  <div className="flex-1 space-y-4 w-full">
+                                    {/* Exact Amount */}
+                                    <div>
+                                      <span className="text-[10px] text-slate-400 block mb-1 uppercase tracking-wider font-bold">Exact Amount to Send:</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-mono text-lg font-black text-white">{getCryptoAmount(payablePrice, cryptoCoin)} {cryptoCoin}</span>
+                                        <button
+                                          id="btn-copy-crypto-amount"
+                                          type="button"
+                                          onClick={() => copyToClipboard(getCryptoAmount(payablePrice, cryptoCoin), 'crypto-amount')}
+                                          className="p-1 rounded hover:bg-slate-900 text-slate-400 hover:text-white transition-all"
+                                          title="Copy Amount"
+                                        >
+                                          {copiedField === 'crypto-amount' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Wallet Address */}
+                                    <div>
+                                      <span className="text-[10px] text-slate-400 block mb-1 uppercase tracking-wider font-bold">Recipient Wallet Address ({getCryptoNetworkLabel()}):</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-mono text-xs text-slate-300 bg-slate-900/60 py-1.5 px-3 rounded-lg border border-slate-800 break-all flex-1">
+                                          {getCryptoWalletAddress()}
+                                        </span>
+                                        <button
+                                          id="btn-copy-crypto-addr"
+                                          type="button"
+                                          onClick={() => copyToClipboard(getCryptoWalletAddress(), 'crypto-address')}
+                                          className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white transition-all"
+                                          title="Copy Address"
+                                        >
+                                          {copiedField === 'crypto-address' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                                        </button>
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                            </div>
+                              </>
+                            )}
                           </div>
 
                           {/* Form Input for TxHash & Final confirmation */}
@@ -952,18 +954,6 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
                       {/* Expanded Panel */}
                       {isSelected && (
                         <div className="p-6 border-t border-slate-900 bg-slate-950/40 space-y-6 animate-fade-in">
-                          {/* Banner Header */}
-                          <div className="p-4 rounded-xl bg-teal-500/5 border border-teal-500/20 text-xs text-slate-300 flex items-start gap-3">
-                            <Building2 className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
-                            <div className="w-full">
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="font-bold text-white uppercase tracking-wider text-[10px]">Bank Wire Receiving Account Details</span>
-                                <span className="px-2 py-0.5 rounded bg-teal-500/10 border border-teal-500/30 text-teal-400 text-[9px] font-bold">USD / GBP / EUR</span>
-                              </div>
-                              Transfer directly to ApexGrowth's local receiving accounts via ACH, BACS, SEPA, or international wire transfer.
-                            </div>
-                          </div>
-
                           {/* Currency switch buttons */}
                           <div className="grid grid-cols-3 gap-2 bg-slate-950 p-1 rounded-xl border border-slate-900">
                             {(['USD', 'GBP', 'EUR'] as const).map((curr) => {
@@ -988,132 +978,167 @@ export function CheckoutPage({ packageSlug, onNavigate }: CheckoutPageProps) {
                             })}
                           </div>
 
-                          {/* Bank details grid rows */}
-                          <div className="bg-slate-950 rounded-2xl border border-slate-900 divide-y divide-slate-900 text-xs overflow-hidden">
-                            {/* Beneficiary Row */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-1 hover:bg-slate-900/10 transition-colors">
-                              <span className="text-slate-400">Beneficiary Name:</span>
-                              <span className="font-bold text-white uppercase text-right">{bankDetails.beneficiary}</span>
+                          {!bankDetails.isConfigured ? (
+                            <div className="p-5 rounded-xl bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300 space-y-2 text-center sm:text-left">
+                              <div className="flex items-center gap-2 font-bold text-amber-400 justify-center sm:justify-start">
+                                <AlertCircle className="w-4 h-4 shrink-0" />
+                                <span>Receiving Bank Details Required ({bankCurrencyTab})</span>
+                              </div>
+                              <p className="leading-relaxed">
+                                The merchant has not configured their <strong>{bankCurrencyTab}</strong> receiving bank account details yet in the Admin Dashboard.
+                              </p>
+                              <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-900">
+                                💡 <strong>Admin Checklist:</strong> Go to Admin Dashboard &gt; Contact &amp; Bank Settings to configure your {bankCurrencyTab} bank name, account number, and routing information.
+                              </p>
                             </div>
+                          ) : (
+                            <>
+                              {/* Banner Header */}
+                              <div className="p-4 rounded-xl bg-teal-500/5 border border-teal-500/20 text-xs text-slate-300 flex items-start gap-3">
+                                <Building2 className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
+                                <div className="w-full">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="font-bold text-white uppercase tracking-wider text-[10px]">Bank Wire Receiving Account Details</span>
+                                    <span className="px-2 py-0.5 rounded bg-teal-500/10 border border-teal-500/30 text-teal-400 text-[9px] font-bold">USD / GBP / EUR</span>
+                                  </div>
+                                  Transfer directly to our verified local receiving accounts via ACH, BACS, SEPA, or international wire transfer.
+                                </div>
+                              </div>
 
-                            {/* Bank Name Row */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-1 hover:bg-slate-900/10 transition-colors">
-                              <span className="text-slate-400">Bank Name:</span>
-                              <span className="font-bold text-white uppercase text-right">{bankDetails.bankName}</span>
-                            </div>
+                              {/* Bank details grid rows */}
+                              <div className="bg-slate-950 rounded-2xl border border-slate-900 divide-y divide-slate-900 text-xs overflow-hidden">
+                                {/* Beneficiary Row */}
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-1 hover:bg-slate-900/10 transition-colors">
+                                  <span className="text-slate-400">Beneficiary Name:</span>
+                                  <span className="font-bold text-white uppercase text-right">{bankDetails.beneficiary || 'N/A'}</span>
+                                </div>
 
-                            {/* Account Type Row */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-1 hover:bg-slate-900/10 transition-colors">
-                              <span className="text-slate-400">Account Type:</span>
-                              <span className="font-bold text-white uppercase text-right">{bankDetails.accountType}</span>
-                            </div>
+                                {/* Bank Name Row */}
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-1 hover:bg-slate-900/10 transition-colors">
+                                  <span className="text-slate-400">Bank Name:</span>
+                                  <span className="font-bold text-white uppercase text-right">{bankDetails.bankName || 'N/A'}</span>
+                                </div>
 
-                            {/* Routing Number / Sort Code / BIC */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
-                              <span className="text-slate-400">
-                                {bankCurrencyTab === 'USD' ? 'Routing Number (ACH & Wire):' : bankCurrencyTab === 'GBP' ? 'Sort Code:' : 'BIC / SWIFT Code:'}
-                              </span>
-                              <div className="flex items-center gap-2 self-end sm:self-auto">
-                                <span className="font-mono font-bold text-[#38bdf8]">{bankDetails.routingNumber}</span>
+                                {/* Account Type Row */}
+                                {bankDetails.accountType && (
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-1 hover:bg-slate-900/10 transition-colors">
+                                    <span className="text-slate-400">Account Type:</span>
+                                    <span className="font-bold text-white uppercase text-right">{bankDetails.accountType}</span>
+                                  </div>
+                                )}
+
+                                {/* Routing Number / Sort Code / BIC */}
+                                {bankDetails.routingNumber && (
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
+                                    <span className="text-slate-400">
+                                      {bankCurrencyTab === 'USD' ? 'Routing Number (ACH & Wire):' : bankCurrencyTab === 'GBP' ? 'Sort Code:' : 'BIC / SWIFT Code:'}
+                                    </span>
+                                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                                      <span className="font-mono font-bold text-[#38bdf8]">{bankDetails.routingNumber}</span>
+                                      <button
+                                        id="btn-copy-bank-routing"
+                                        type="button"
+                                        onClick={() => copyToClipboard(bankDetails.routingNumber, 'bank-routing')}
+                                        className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
+                                        title="Copy"
+                                      >
+                                        {copiedField === 'bank-routing' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Account Number / IBAN */}
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
+                                  <span className="text-slate-400">
+                                    {bankCurrencyTab === 'EUR' ? 'IBAN:' : 'Account Number:'}
+                                  </span>
+                                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                                    <span className="font-mono font-extrabold text-emerald-400 text-sm">{bankDetails.accountNumber}</span>
+                                    <button
+                                      id="btn-copy-bank-account"
+                                      type="button"
+                                      onClick={() => copyToClipboard(bankDetails.accountNumber, 'bank-account')}
+                                      className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
+                                      title="Copy"
+                                    >
+                                      {copiedField === 'bank-account' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Bank Address Row */}
+                                {bankDetails.bankAddress && (
+                                  <div className="flex flex-col sm:flex-row sm:items-start justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
+                                    <span className="text-slate-400 shrink-0">Bank Address:</span>
+                                    <div className="flex items-start gap-2 self-end sm:self-auto max-w-xs text-right">
+                                      <span className="font-medium text-slate-300 break-words leading-relaxed text-xs">{bankDetails.bankAddress}</span>
+                                      <button
+                                        id="btn-copy-bank-address"
+                                        type="button"
+                                        onClick={() => copyToClipboard(bankDetails.bankAddress, 'bank-address')}
+                                        className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
+                                        title="Copy"
+                                      >
+                                        {copiedField === 'bank-address' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Payment Reference Code Row */}
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
+                                  <span className="text-slate-400 font-bold">Payment Reference Code:</span>
+                                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                                    <span className="font-mono font-black text-amber-400">{sessionOrderCode}</span>
+                                    <button
+                                      id="btn-copy-bank-ref"
+                                      type="button"
+                                      onClick={() => copyToClipboard(sessionOrderCode, 'bank-reference')}
+                                      className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
+                                      title="Copy Code"
+                                    >
+                                      {copiedField === 'bank-reference' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Reference input & Wire Confirm button */}
+                              <div className="space-y-3">
+                                <div>
+                                  <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-2">
+                                    Enter Your Transfer Reference / Transaction ID *
+                                  </label>
+                                  <input
+                                    id="input-bank-ref"
+                                    type="text"
+                                    required
+                                    value={wireReference}
+                                    onChange={(e) => setWireReference(e.target.value)}
+                                    placeholder="e.g. ACH-9812405 or Wire Ref #"
+                                    className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none transition-colors"
+                                  />
+                                </div>
+
                                 <button
-                                  id="btn-copy-bank-routing"
-                                  type="button"
-                                  onClick={() => copyToClipboard(bankDetails.routingNumber, 'bank-routing')}
-                                  className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
-                                  title="Copy"
+                                  id="btn-bank-submit"
+                                  onClick={(e) => handleCheckoutSubmit(e, wireReference)}
+                                  disabled={isSubmitting || !wireReference.trim()}
+                                  className="w-full py-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-sm shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                                 >
-                                  {copiedField === 'bank-routing' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                  {isSubmitting ? (
+                                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <>
+                                      <span>Submit Transfer &amp; Confirm Order (${payablePrice} USD)</span>
+                                      <ArrowRight className="w-4 h-4" />
+                                    </>
+                                  )}
                                 </button>
                               </div>
-                            </div>
-
-                            {/* Account Number / IBAN */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
-                              <span className="text-slate-400">
-                                {bankCurrencyTab === 'EUR' ? 'IBAN:' : 'Account Number:'}
-                              </span>
-                              <div className="flex items-center gap-2 self-end sm:self-auto">
-                                <span className="font-mono font-extrabold text-emerald-400 text-sm">{bankDetails.accountNumber}</span>
-                                <button
-                                  id="btn-copy-bank-account"
-                                  type="button"
-                                  onClick={() => copyToClipboard(bankDetails.accountNumber, 'bank-account')}
-                                  className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
-                                  title="Copy"
-                                >
-                                  {copiedField === 'bank-account' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Bank Address Row */}
-                            <div className="flex flex-col sm:flex-row sm:items-start justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
-                              <span className="text-slate-400 shrink-0">Bank Address:</span>
-                              <div className="flex items-start gap-2 self-end sm:self-auto max-w-xs text-right">
-                                <span className="font-medium text-slate-300 break-words leading-relaxed text-xs">{bankDetails.bankAddress}</span>
-                                <button
-                                  id="btn-copy-bank-address"
-                                  type="button"
-                                  onClick={() => copyToClipboard(bankDetails.bankAddress, 'bank-address')}
-                                  className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
-                                  title="Copy"
-                                >
-                                  {copiedField === 'bank-address' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Payment Reference Code Row */}
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-2 hover:bg-slate-900/10 transition-colors">
-                              <span className="text-slate-400 font-bold">Payment Reference Code:</span>
-                              <div className="flex items-center gap-2 self-end sm:self-auto">
-                                <span className="font-mono font-black text-amber-400">ORDER-#APX-2026-00003</span>
-                                <button
-                                  id="btn-copy-bank-ref"
-                                  type="button"
-                                  onClick={() => copyToClipboard('ORDER-#APX-2026-00003', 'bank-reference')}
-                                  className="p-1 rounded hover:bg-slate-900 text-slate-500 hover:text-white transition-all"
-                                  title="Copy Code"
-                                >
-                                  {copiedField === 'bank-reference' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Reference input & Wire Confirm button */}
-                          <div className="space-y-3">
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider mb-2">
-                                Enter Your Transfer Reference / Transaction ID *
-                              </label>
-                              <input
-                                id="input-bank-ref"
-                                type="text"
-                                required
-                                value={wireReference}
-                                onChange={(e) => setWireReference(e.target.value)}
-                                placeholder="e.g. ACH-9812405 or Wire Ref #"
-                                className="w-full px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-white text-sm placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none transition-colors"
-                              />
-                            </div>
-
-                            <button
-                              id="btn-bank-submit"
-                              onClick={(e) => handleCheckoutSubmit(e, wireReference)}
-                              disabled={isSubmitting || !wireReference.trim()}
-                              className="w-full py-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-sm shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
-                            >
-                              {isSubmitting ? (
-                                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              ) : (
-                                <>
-                                  <span>Submit Transfer &amp; Confirm Order (${payablePrice} USD)</span>
-                                  <ArrowRight className="w-4 h-4" />
-                                </>
-                              )}
-                            </button>
-                          </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

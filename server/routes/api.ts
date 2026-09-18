@@ -5,6 +5,9 @@ import { dbService } from '../services/dbService.js';
 import { paystackService } from '../services/paystackService.js';
 import { notificationService } from '../services/notificationService.js';
 import { aiService } from '../services/aiService.js';
+import { telegramScoutService } from '../services/scout/telegramScoutService.js';
+import { actionCenter } from '../services/scout/actionCenter.js';
+import { backgroundScoutWorker } from '../services/scout/backgroundWorker.js';
 import { requireAdminAuth, requireRole, generateToken, rateLimit, AuthRequest } from '../auth.js';
 import { AdminUser } from '../../src/types/index.js';
 import {
@@ -417,7 +420,7 @@ apiRouter.post('/webhooks/paystack', async (req: Request, res: Response) => {
 
   // 2. Verify signature authenticity with raw body
   const rawBody = (req as any).rawBody || JSON.stringify(req.body);
-  const isValid = paystackService.verifyWebhookSignature(rawBody, signature);
+  const isValid = await paystackService.verifyWebhookSignature(rawBody, signature);
 
   if (!isValid) {
     res.status(400).json({ error: 'Invalid Paystack webhook signature' });
@@ -1543,3 +1546,453 @@ apiRouter.get('/admin/ai/analytics', requireAdminAuth, requireRole(['superadmin'
     res.status(500).json({ error: 'Failed to load AI analytics', details: err.message || String(err) });
   }
 });
+
+// ==========================================
+// TELEGRAM SCOUT WEBHOOK (Public Ingress)
+// ==========================================
+apiRouter.post('/scout/telegram-webhook', async (req: Request, res: Response) => {
+  try {
+    const update = req.body;
+    // Process webhook asynchronously and respond 200 immediately per Telegram Bot API best practice
+    telegramScoutService.handleWebhookUpdate(update).catch((err) => {
+      console.warn('[TelegramScoutWebhook] Update processing warning:', err?.message || err);
+    });
+    res.status(200).json({ ok: true });
+  } catch (err: any) {
+    console.warn('[TelegramScoutWebhook] Error:', err?.message || err);
+    res.status(200).json({ ok: true }); // Always return 200 to Telegram to prevent retry storms
+  }
+});
+
+// ==========================================
+// ADMIN: OPPORTUNITY SCOUT & INTELLIGENCE
+// ==========================================
+
+// 1. Get Scout Settings
+apiRouter.get('/admin/scout/settings', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const settings = await dbService.getScoutSettings();
+    res.json(settings);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to retrieve scout settings', details: err.message || String(err) });
+  }
+});
+
+// 2. Update Scout Settings
+apiRouter.put('/admin/scout/settings', requireAdminAuth, requireRole(['superadmin', 'admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const updated = await dbService.updateScoutSettings(req.body);
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to update scout settings', details: err.message || String(err) });
+  }
+});
+
+// 3. Get Opportunities with optional filters
+apiRouter.get('/admin/scout/opportunities', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const score = typeof req.query.score === 'string' ? req.query.score : undefined;
+    const list = await dbService.getOpportunities({ status, score });
+    res.json(list);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to load opportunities', details: err.message || String(err) });
+  }
+});
+
+// 4. Get Scout Overview Stats
+apiRouter.get('/admin/scout/stats', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const stats = await dbService.getScoutStats();
+    res.json(stats);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to load scout stats', details: err.message || String(err) });
+  }
+});
+
+// 5. Get Single Opportunity
+apiRouter.get('/admin/scout/opportunities/:id', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const opp = await dbService.getOpportunityById(req.params.id);
+    if (!opp) {
+      res.status(404).json({ error: 'Opportunity not found' });
+      return;
+    }
+    res.json(opp);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to load opportunity', details: err.message || String(err) });
+  }
+});
+
+// 6. Approve Opportunity Draft (Human-in-the-Loop Approval)
+apiRouter.post('/admin/scout/opportunities/:id/approve', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const opp = await actionCenter.approveOpportunity(req.params.id);
+    res.json({ success: true, opportunity: opp });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to approve opportunity', details: err.message || String(err) });
+  }
+});
+
+// 6b. Dispatch Approved Outreach via Email Provider (Gmail SMTP / Resend)
+apiRouter.post('/admin/scout/opportunities/:id/dispatch', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { emailOutreachDispatcher } = await import('../services/scout/emailOutreachDispatcher.js');
+    const result = await emailOutreachDispatcher.dispatchOutreach(req.params.id);
+    const opp = await dbService.getOpportunityById(req.params.id);
+    res.json({ ...result, opportunity: opp });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message || 'Dispatch execution failed' });
+  }
+});
+
+// 6c. Test Outbound Email Provider Connection (Gmail SMTP / Resend)
+apiRouter.post('/admin/scout/email/test', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { provider, gmailUser, gmailAppPassword, resendApiKey } = req.body || {};
+    const { emailOutreachDispatcher } = await import('../services/scout/emailOutreachDispatcher.js');
+    const result = await emailOutreachDispatcher.testConnection(provider || 'gmail', {
+      gmailUser,
+      gmailAppPassword,
+      resendApiKey,
+    });
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err?.message || 'Email connection test failed' });
+  }
+});
+
+// 7. Reject Opportunity
+apiRouter.post('/admin/scout/opportunities/:id/reject', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const opp = await actionCenter.rejectOpportunity(req.params.id);
+    res.json({ success: true, opportunity: opp });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to reject opportunity', details: err.message || String(err) });
+  }
+});
+
+// 8. Refine Outreach Draft
+apiRouter.post('/admin/scout/opportunities/:id/refine', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { feedback } = req.body;
+    if (!feedback || typeof feedback !== 'string') {
+      res.status(400).json({ error: 'Feedback string is required' });
+      return;
+    }
+    const opp = await actionCenter.refineOpportunity(req.params.id, feedback);
+    res.json({ success: true, opportunity: opp });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to refine draft', details: err.message || String(err) });
+  }
+});
+
+// 9. Mark Opportunity Outreach as Sent
+apiRouter.post('/admin/scout/opportunities/:id/mark-sent', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const opp = await actionCenter.markSent(req.params.id);
+    res.json({ success: true, opportunity: opp });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to mark opportunity as sent', details: err.message || String(err) });
+  }
+});
+
+// 10. Trigger Instant Scout Run (On-demand)
+apiRouter.post('/admin/scout/trigger-scout', requireAdminAuth, requireRole(['superadmin', 'admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await backgroundScoutWorker.triggerNow();
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Scout trigger failed', details: err.message || String(err) });
+  }
+});
+
+// 11. Run Instant On-Demand Audit on a Website
+apiRouter.post('/admin/scout/audit-url', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { websiteUrl, prospectName } = req.body;
+    if (!websiteUrl || typeof websiteUrl !== 'string') {
+      res.status(400).json({ error: 'websiteUrl is required' });
+      return;
+    }
+    const opp = await actionCenter.conductManualAudit(websiteUrl, prospectName);
+    const settings = await dbService.getScoutSettings();
+    const token = settings.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = settings.telegramChatId || process.env.TELEGRAM_CHAT_ID;
+    const isTelegramEnabled = settings.telegramEnabled !== false;
+
+    if (isTelegramEnabled && token && chatId) {
+      telegramScoutService.sendOpportunityAlert(opp, settings).catch((err) => {
+        console.warn('[AuditUrl] Failed to dispatch Telegram alert:', err?.message || err);
+      });
+    }
+    res.json({ success: true, opportunity: opp });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Audit failed', details: err.message || String(err) });
+  }
+});
+
+// 12. Send Test Telegram Alert
+apiRouter.post('/admin/scout/test-telegram', requireAdminAuth, requireRole(['superadmin', 'admin']), async (req: AuthRequest, res: Response) => {
+  try {
+    const settings = await dbService.getScoutSettings();
+    const existingOpps = await dbService.getOpportunities({ limit: 1 });
+    let oppToDispatch = existingOpps[0];
+
+    // If no opportunities exist yet, dynamically audit the active application host
+    if (!oppToDispatch) {
+      const host = req.get('host') || 'localhost:3000';
+      const protocol = req.protocol || 'http';
+      const auditTargetUrl = `${protocol}://${host}`;
+      
+      const { actionCenter } = await import('../services/scout/actionCenter.js');
+      oppToDispatch = await actionCenter.conductManualAudit(auditTargetUrl, req.adminUser?.name || 'Administrator');
+    }
+
+    const result = await telegramScoutService.sendOpportunityAlert(oppToDispatch, settings);
+
+    if (result.success) {
+      res.json({ success: true, message: `Telegram alert delivered successfully for ${oppToDispatch.businessName}!` });
+    } else {
+      res.status(400).json({ success: false, error: result.error || 'Failed to dispatch Telegram message' });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: 'Test telegram failed', details: err.message || String(err) });
+  }
+});
+
+// Test Tavily Search connection
+apiRouter.post('/admin/scout/test-tavily', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { tavilyApiKey } = req.body || {};
+    const { tavilySearchService } = await import('../services/scout/tavilySearchService.js');
+    const result = await tavilySearchService.testConnection(tavilyApiKey);
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err?.message || 'Tavily test failed' });
+  }
+});
+
+// Dynamic AI Models Listing from Provider
+apiRouter.post('/admin/scout/fetch-ai-models', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { provider, apiKey, customBaseUrl } = req.body || {};
+    const { multiAiProviderService } = await import('../services/scout/multiAiProviderService.js');
+    const result = await multiAiProviderService.fetchLiveModels(provider, apiKey, customBaseUrl);
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, models: [], error: err?.message || 'Failed to fetch dynamic models' });
+  }
+});
+
+// Test AI Provider Connection & Latency
+apiRouter.post('/admin/scout/test-ai-provider', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { provider, apiKey, model, customBaseUrl } = req.body || {};
+    const { multiAiProviderService } = await import('../services/scout/multiAiProviderService.js');
+    const result = await multiAiProviderService.testProviderConnection(provider, apiKey, model, customBaseUrl);
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(400).json(result);
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err?.message || 'AI provider test failed' });
+  }
+});
+
+// ====================================================
+// APEXGROWTH ASSISTANT: DEAL-TO-DELIVERY API ENDPOINTS
+// ====================================================
+
+// List All Deals
+apiRouter.get('/admin/pipeline/deals', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const deals = await pipelineOperationsService.getDeals(req.query.stage as string);
+    res.json(deals || []);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to load deals' });
+  }
+});
+
+// Create Deal
+const handleCreateDeal = async (req: AuthRequest, res: Response) => {
+  try {
+    const { prospectId, servicePackage, proposedPrice, currency, notes } = req.body;
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const deal = await pipelineOperationsService.createDealFromProspect(prospectId, {
+      servicePackage,
+      proposedPrice: proposedPrice ? Number(proposedPrice) : undefined,
+      currency,
+      notes,
+    });
+    res.json(deal);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to create deal' });
+  }
+};
+apiRouter.post('/admin/pipeline/deals', requireAdminAuth, handleCreateDeal);
+apiRouter.post('/admin/pipeline/deals/from-prospect', requireAdminAuth, handleCreateDeal);
+
+// Update Deal Stage
+apiRouter.patch('/admin/pipeline/deals/:id/stage', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { stage, notes } = req.body;
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const deal = await pipelineOperationsService.updateDealStage(id, stage, notes);
+    res.json(deal);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to update deal stage' });
+  }
+});
+
+// Convert Deal to Active Project
+const handleConvertDeal = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const project = await pipelineOperationsService.convertDealToActiveProject(id);
+    res.json(project);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to convert deal to project' });
+  }
+};
+apiRouter.post('/admin/pipeline/deals/:id/convert', requireAdminAuth, handleConvertDeal);
+apiRouter.post('/admin/pipeline/deals/:id/convert-to-project', requireAdminAuth, handleConvertDeal);
+
+// List All Active Projects
+apiRouter.get('/admin/pipeline/projects', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const projects = await pipelineOperationsService.getActiveProjects(req.query.phase as string);
+    res.json(projects || []);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to load active projects' });
+  }
+});
+
+// Get Project by ID
+apiRouter.get('/admin/pipeline/projects/:id', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const project = await pipelineOperationsService.getProjectById(id);
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    res.json(project);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to fetch project' });
+  }
+});
+
+// Add Deliverable to Project
+apiRouter.post('/admin/pipeline/deliverables', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { projectId, title, description, phase, requiresApproval } = req.body;
+    if (!projectId || !title) {
+      return res.status(400).json({ message: 'projectId and title are required' });
+    }
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const deliverable = await pipelineOperationsService.addDeliverable({
+      projectId,
+      title,
+      description,
+      phase,
+      requiresApproval,
+    });
+    res.json(deliverable);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to add deliverable' });
+  }
+});
+
+// Update Deliverable Status & Content
+const handleUpdateDeliverable = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status, draft, final, feedback, notes } = req.body;
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const updated = await pipelineOperationsService.updateDeliverableStatus(id, status, { draft, final, feedback: feedback || notes });
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to update deliverable' });
+  }
+};
+apiRouter.patch('/admin/pipeline/deliverables/:id', requireAdminAuth, handleUpdateDeliverable);
+apiRouter.patch('/admin/pipeline/deliverables/:id/status', requireAdminAuth, handleUpdateDeliverable);
+
+// Advance Project Phase
+apiRouter.patch('/admin/pipeline/projects/:id/phase', requireAdminAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { phase, currentPhase } = req.body;
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const project = await pipelineOperationsService.advanceProjectPhase(id, phase || currentPhase);
+    res.json(project);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to advance project phase' });
+  }
+});
+
+// Co-Work with AI Assistant in Project Context
+const handleCoWork = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { instruction } = req.body;
+    if (!instruction || !instruction.trim()) {
+      return res.status(400).json({ message: 'Instruction is required' });
+    }
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const result = await pipelineOperationsService.coWorkWithAi(id, instruction.trim());
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Co-work execution failed' });
+  }
+};
+apiRouter.post('/admin/pipeline/projects/:id/cowork', requireAdminAuth, handleCoWork);
+apiRouter.post('/admin/pipeline/projects/:id/co-work', requireAdminAuth, handleCoWork);
+
+// List Approval Gates
+const handleGetApprovalGates = async (req: AuthRequest, res: Response) => {
+  try {
+    const { status } = req.query;
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const gates = await pipelineOperationsService.getApprovalGates(status as string);
+    res.json(gates || []);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to load approval gates' });
+  }
+};
+apiRouter.get('/admin/pipeline/approvals', requireAdminAuth, handleGetApprovalGates);
+apiRouter.get('/admin/pipeline/approval-gates', requireAdminAuth, handleGetApprovalGates);
+
+// Resolve Approval Gate (Approve or Reject)
+const handleResolveApprovalGate = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { approved, status, reviewNotes } = req.body;
+    const isApproved = approved !== undefined ? Boolean(approved) : status === 'APPROVED';
+    const { pipelineOperationsService } = await import('../services/scout/pipelineOperationsService.js');
+    const result = await pipelineOperationsService.resolveApprovalGate(id, isApproved);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ message: err?.message || 'Failed to resolve approval gate' });
+  }
+};
+apiRouter.post('/admin/pipeline/approvals/:id/decision', requireAdminAuth, handleResolveApprovalGate);
+apiRouter.post('/admin/pipeline/approval-gates/:id/resolve', requireAdminAuth, handleResolveApprovalGate);
+
+
