@@ -215,6 +215,15 @@ export class EmailOutreachDispatcher {
       };
     }
 
+    // STRICT ENFORCEMENT: Block dispatching if the opportunity is unverified
+    if (!opp.isVerifiedOpportunity) {
+      return {
+        success: false,
+        provider: 'gmail',
+        error: `STRICT GATE BLOCKED: Opportunity #${opportunityId} has not passed the Lead Intelligence Gate and cannot be dispatched.`,
+      };
+    }
+
     // 1. Idempotency & Duplicate Send Protection
     if (opp.outreachStatus === 'SENT') {
       return {

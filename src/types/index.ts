@@ -380,7 +380,8 @@ export type OutreachStatus = 'DRAFTED' | 'REFINED' | 'APPROVED' | 'DISPATCHING' 
 
 export interface Opportunity {
   id: string;
-  opportunityFingerprint: string; // Unique hash(person + company + platform + source_url)
+  opportunityFingerprint?: string;
+  entityFingerprint?: string;
   title: string;
   prospectName: string;
   businessName: string;
@@ -392,15 +393,13 @@ export interface Opportunity {
   relevanceSummary: string;
   evidence: EvidenceObservation[];
   publicContacts: PublicContact[];
-  
-  // Intelligence Gate Metrics
-  confidenceScores: {
-    identity: number; // 0-100
-    company: number;  // 0-100
-    contact: number;  // 0-100
-    problem: number;  // 0-100
+  confidenceScores?: {
+    identity: number;
+    company: number;
+    contact: number;
+    problem: number;
   };
-  verificationStatus: {
+  verificationStatus?: {
     identityResolved: boolean;
     companyVerified: boolean;
     contactAvailable: boolean;
@@ -408,8 +407,7 @@ export interface Opportunity {
     auditPerformed: boolean;
     isDeduplicated: boolean;
   };
-  isVerifiedOpportunity: boolean; // Must be true for "Approve & Send"
-  
+  isVerifiedOpportunity: boolean;
   opportunityScore: OpportunityScore;
   outreachStatus: OutreachStatus;
   outreachDraft: string;

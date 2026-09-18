@@ -457,6 +457,8 @@ export const opportunities = pgTable(
   'opportunities',
   {
     id: text('id').primaryKey(),
+    opportunityFingerprint: text('opportunity_fingerprint'), // Hash(person + company + platform + source_url)
+    entityFingerprint: text('entity_fingerprint'),       // Hash(person + company + normalized_domain)
     title: text('title').notNull(),
     prospectName: text('prospect_name').notNull(),
     businessName: text('business_name').notNull(),
@@ -468,6 +470,9 @@ export const opportunities = pgTable(
     relevanceSummary: text('relevance_summary').notNull(),
     evidence: jsonb('evidence').default([]).notNull(), // Array of EvidenceObservation
     publicContacts: jsonb('public_contacts').default([]).notNull(), // Array of PublicContact with explicit provenance & confidence
+    confidenceScores: jsonb('confidence_scores'), // Identity, company, contact, problem confidence metrics
+    verificationStatus: jsonb('verification_status'), // Object tracking individual gate criteria passing/failing
+    isVerifiedOpportunity: boolean('is_verified_opportunity').default(false).notNull(), // Flag determining outreach-readiness
     opportunityScore: text('opportunity_score').default('MEDIUM').notNull(), // 'HIGH' | 'MEDIUM' | 'LOW'
     outreachStatus: text('outreach_status').default('DRAFTED').notNull(), // 'DRAFTED' | 'REFINED' | 'APPROVED' | 'SENT' | 'REJECTED'
     outreachDraft: text('outreach_draft').notNull(),

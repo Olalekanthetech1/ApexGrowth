@@ -55,17 +55,26 @@ export class IntelligenceEngine {
     // 5. Construct adaptive relevance summary
     const relevanceSummary = this.buildAdaptiveRelevanceSummary(candidate, liveAudit);
 
-    // 6. Generate consultative outreach draft via Gemini (or adaptive dynamic composer)
-    let outreachDraft = await this.generateOutreachDraftWithAI(candidate, liveAudit, evidence, publicContacts);
-    if (!outreachDraft) {
-      outreachDraft = this.generateAdaptiveDynamicOutreach(candidate, liveAudit, evidence, publicContacts);
+    // 6. Run Lead Intelligence Gate Evaluation
+    const gateResult = this.evaluateOpportunityGate(candidate, liveAudit, publicContacts);
+
+    // 7. Generate consultative outreach draft ONLY if verified
+    let outreachDraft = '';
+    if (gateResult.isVerifiedOpportunity) {
+      const generated = await this.generateOutreachDraftWithAI(candidate, liveAudit, evidence, publicContacts);
+      outreachDraft = generated || this.generateAdaptiveDynamicOutreach(candidate, liveAudit, evidence, publicContacts);
     }
+
+    const opportunityFingerprint = this.calculateOpportunityFingerprint(candidate.sourcePlatform, candidate.sourceUrl);
+    const entityFingerprint = this.calculateEntityFingerprint(candidate.prospectName, candidate.businessName, candidate.websiteUrl);
 
     const now = new Date().toISOString();
     const oppId = `opp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     return {
       id: oppId,
+      opportunityFingerprint,
+      entityFingerprint,
       title: candidate.title,
       prospectName: candidate.prospectName,
       businessName: candidate.businessName,
@@ -77,11 +86,77 @@ export class IntelligenceEngine {
       relevanceSummary,
       evidence,
       publicContacts,
+      confidenceScores: gateResult.confidenceScores,
+      verificationStatus: gateResult.verificationStatus,
+      isVerifiedOpportunity: gateResult.isVerifiedOpportunity,
       opportunityScore,
       outreachStatus: 'DRAFTED',
       outreachDraft,
       createdAt: now,
       updatedAt: now,
+    };
+  }
+
+  /**
+   * Unified Lead Intelligence Gate Evaluation
+   */
+  public evaluateOpportunityGate(
+    candidate: RawOpportunityCandidate,
+    audit: LiveAuditResult | null,
+    contacts: PublicContact[]
+  ) {
+    // 1. Identity Resolution (PROSPECT_STATED / IDENTITY_RESOLVED)
+    // Non-placeholder name and not anonymous
+    const isNameResolved = this.isIdentityResolved(candidate.prospectName);
+    const isPlatformAcc = this.checkIfPlatformAccount(candidate);
+    const identityResolved = isNameResolved && !isPlatformAcc;
+
+    // 2. Company/Domain Verification (AUDIT_OBSERVED)
+    // Needs valid website url and a non-placeholder company name
+    const hasWebsite = !!candidate.websiteUrl;
+    const isCompanyResolved = candidate.businessName && candidate.businessName !== 'E-commerce Brand' && candidate.businessName !== 'Prospective Brand' && candidate.businessName !== 'Founder\'s Venture' && candidate.businessName !== 'Your Store';
+    const auditPerformed = audit !== null && !audit.fetchError;
+    const companyVerified = hasWebsite && !!isCompanyResolved && auditPerformed;
+
+    // 3. Contact Available (CONTACT_VERIFIED)
+    // High or Medium confidence contact info exists
+    const contactAvailable = contacts.length > 0 && contacts.some(
+      (c) => c.value && (c.type === 'email' || c.type === 'phone' || c.type === 'instagram' || c.type === 'whatsapp' || c.type === 'twitter')
+    );
+
+    // 4. Problem Explicit (PROSPECT_STATED)
+    // Explicit growth or conversion drop-off pain points mentioned by prospect
+    const hasDetectedPainPoints = candidate.detectedPainPoints && candidate.detectedPainPoints.length > 0;
+    const excerptLower = (candidate.sourcePostExcerpt || '').toLowerCase();
+    const explicitKeywords = ['checkout', 'conversion', 'cart', 'sales', 'bounce', 'speed', 'drop', 'friction', 'visitor', 'customer', 'stripe', 'shopify', 'ad', 'marketing'];
+    const textHasProblem = explicitKeywords.some((kw) => excerptLower.includes(kw));
+    const problemExplicit = hasDetectedPainPoints && textHasProblem;
+
+    // 5. Confidence Score Math
+    const confidenceScores = {
+      identity: identityResolved ? 1.0 : (candidate.prospectName && candidate.prospectName !== 'Founder' ? 0.5 : 0.1),
+      company: companyVerified ? 1.0 : (hasWebsite ? 0.4 : 0.1),
+      contact: contactAvailable ? 1.0 : (contacts.some(c => c.type === 'reddit') ? 0.3 : 0.0),
+      problem: problemExplicit ? 1.0 : (hasDetectedPainPoints ? 0.6 : 0.1),
+    };
+
+    // Overall Verification status
+    const verificationStatus = {
+      identityResolved,
+      companyVerified,
+      contactAvailable,
+      problemExplicit,
+      auditPerformed,
+      isDeduplicated: true, // evaluated dynamically
+    };
+
+    // Strict rule: must satisfy the core pillars to be a verified opportunity
+    const isVerifiedOpportunity = identityResolved && companyVerified && contactAvailable && problemExplicit;
+
+    return {
+      confidenceScores,
+      verificationStatus,
+      isVerifiedOpportunity,
     };
   }
 
@@ -246,8 +321,8 @@ export class IntelligenceEngine {
     observations.push({
       category: 'public_intent',
       observation: `Observed: Public discussion on ${candidate.sourcePlatform} regarding ${candidate.detectedPainPoints.join(', ') || 'store performance'}.`,
-      potentialImpact: 'Indicates active intent from business stakeholder to address conversion obstacles.',
-      sourceOrMethod: `Live thread URL: ${candidate.sourceUrl}`,
+      potentialImpact: 'Indicates user-stated interest in addressing this performance area.',
+      sourceOrMethod: `Source discussion thread URL: ${candidate.sourceUrl}`,
       verified: true,
     });
 
@@ -256,9 +331,9 @@ export class IntelligenceEngine {
       if (audit.fetchError) {
         observations.push({
           category: 'mobile_performance',
-          observation: `Observed: Target URL ${audit.url} did not respond during automated audit (${audit.fetchError}).`,
-          potentialImpact: 'Unresponsive or timing out server leads to instant customer bounce and ad spend loss.',
-          sourceOrMethod: 'Live HTTP GET handshake test',
+          observation: `Observed: Target URL ${audit.url} was unresponsive during automated audit (${audit.fetchError}).`,
+          potentialImpact: 'Unresponsive servers prevent user visits and lead directly to bounce rate increase.',
+          sourceOrMethod: 'HTTP connection audit',
           verified: true,
         });
       } else {
@@ -267,50 +342,33 @@ export class IntelligenceEngine {
 
         observations.push({
           category: 'mobile_performance',
-          observation: `Observed: Live page handshake completed in ${audit.responseTimeMs}ms (${responseSec}s, ${kb} KB payload, HTTP ${audit.statusCode}).`,
-          potentialImpact:
-            (audit.responseTimeMs || 0) > 2500
-              ? 'Response time exceeding 2.5s correlates with 15–30% mobile visitor drop-off before offer render.'
-              : 'Initial server response latency is within standard threshold.',
-          sourceOrMethod: 'Live HTTP synthetic performance timing',
+          observation: `Observed: Initial page load latency is ${audit.responseTimeMs}ms (${responseSec}s, ${kb} KB payload).`,
+          potentialImpact: 'High load latency can negatively affect page retention and checkout completion rates.',
+          sourceOrMethod: 'HTTP synthetic performance timing',
           verified: true,
         });
 
         if (!audit.hasResponsiveViewport) {
           observations.push({
             category: 'ux_checkout',
-            observation: 'Observed: Missing standard mobile <meta name="viewport"> tag in HTML head.',
-            potentialImpact: 'Causes mobile browsers to render at desktop width, requiring manual zoom and disrupting checkout.',
-            sourceOrMethod: 'HTML document head DOM inspection',
+            observation: 'Observed: Missing standard mobile meta viewport tag.',
+            potentialImpact: 'Can cause incorrect rendering on mobile screens, affecting mobile navigation.',
+            sourceOrMethod: 'HTML header DOM inspection',
             verified: true,
           });
-        } else if (audit.imageCount > 0 && audit.lazyImageCount < audit.imageCount) {
+        }
+
+        if (audit.imageCount > 0 && audit.lazyImageCount < audit.imageCount) {
           const unlazy = audit.imageCount - audit.lazyImageCount;
           observations.push({
             category: 'mobile_performance',
-            observation: `Observed: ${unlazy} of ${audit.imageCount} images on page do not implement native lazy-loading (loading="lazy").`,
-            potentialImpact: 'Forces mobile browser to download all media assets up-front, delaying checkout CTA interactability.',
+            observation: `Observed: ${unlazy} of ${audit.imageCount} image elements do not implement native lazy-loading (loading="lazy").`,
+            potentialImpact: 'All images are loaded immediately, which increases initial page load weight.',
             sourceOrMethod: 'DOM image element audit',
-            verified: true,
-          });
-        } else {
-          observations.push({
-            category: 'ux_checkout',
-            observation: `Observed: Page structure contains ${audit.buttonCount} interactive action elements and ${audit.formCount} form containers.`,
-            potentialImpact: 'Streamlining form fields directly shortens the path to purchase completion.',
-            sourceOrMethod: 'DOM interactive element audit',
             verified: true,
           });
         }
       }
-    } else {
-      observations.push({
-        category: 'copy_funnel',
-        observation: 'Observed: Inquiry currently relies on community threads without a dedicated, verified funnel URL.',
-        potentialImpact: 'Lacking a focused direct-response funnel increases prospect friction.',
-        sourceOrMethod: 'Channel review & inquiry analysis',
-        verified: true,
-      });
     }
 
     return observations;
@@ -434,7 +492,7 @@ MANDATORY RULES:
   ): string {
     const isResolved = this.isIdentityResolved(candidate.prospectName);
     const greeting = isResolved ? `Hey ${candidate.prospectName},` : `Hi there,`;
-    
+
     const biz =
       candidate.businessName && candidate.businessName !== 'E-commerce Brand'
         ? candidate.businessName
@@ -461,14 +519,8 @@ MANDATORY RULES:
     return lines.join('\n\n');
   }
 
-  private generateFingerprint(candidate: RawOpportunityCandidate): string {
-    const p = (candidate.prospectName || '').toLowerCase().trim();
-    const c = (candidate.businessName || '').toLowerCase().trim();
-    const s = (candidate.sourceUrl || '').toLowerCase().trim();
-    const plat = candidate.sourcePlatform;
-    
-    // Simple string concatenation for hashing
-    const raw = `${p}|${c}|${plat}|${s}`;
+  public calculateOpportunityFingerprint(platform: string, sourceUrl: string): string {
+    const raw = `${platform.toLowerCase().trim()}|${sourceUrl.toLowerCase().trim()}`;
     let hash = 0;
     for (let i = 0; i < raw.length; i++) {
       hash = ((hash << 5) - hash) + raw.charCodeAt(i);
@@ -477,18 +529,38 @@ MANDATORY RULES:
     return `fp_${Math.abs(hash).toString(36)}`;
   }
 
+  public calculateEntityFingerprint(prospectName: string, businessName: string, websiteUrl?: string): string {
+    const p = prospectName.toLowerCase().trim();
+    const b = businessName.toLowerCase().trim();
+    let domain = '';
+    if (websiteUrl) {
+      try {
+        domain = new URL(websiteUrl).hostname.replace(/^www\./i, '').toLowerCase().trim();
+      } catch {
+        domain = websiteUrl.toLowerCase().trim();
+      }
+    }
+    const raw = `${p}|${b}|${domain}`;
+    let hash = 0;
+    for (let i = 0; i < raw.length; i++) {
+      hash = ((hash << 5) - hash) + raw.charCodeAt(i);
+      hash |= 0;
+    }
+    return `ent_${Math.abs(hash).toString(36)}`;
+  }
+
   private isIdentityResolved(name: string): boolean {
     if (!name) return false;
     const genericNames = ['founder', 'community founder', 'store owner', 'e-commerce owner', 'admin', 'user', 'prospect'];
     const lower = name.toLowerCase();
-    return !genericNames.some(g => lower.includes(g)) && name.length > 2;
+    return !genericNames.some((g) => lower.includes(g)) && name.length > 2;
   }
 
   private checkIfPlatformAccount(candidate: RawOpportunityCandidate): boolean {
     const platforms = ['shopify', 'stripe', 'klaviyo', 'meta', 'google', 'amazon', 'tiktok', 'bigcommerce', 'woocommerce'];
     const p = (candidate.prospectName || '').toLowerCase();
     const b = (candidate.businessName || '').toLowerCase();
-    return platforms.some(plat => p.includes(plat) || b.includes(plat)) || p.includes('support');
+    return platforms.some((plat) => p.includes(plat) || b.includes(plat)) || p.includes('support');
   }
 
   /**

@@ -22,21 +22,51 @@ export class ActionCenter {
     const candidates = await discoveryEngine.discoverCandidates(settings.targetNiches, settings.intentKeywords);
 
     let opportunitiesCreated = 0;
+    let opportunitiesMerged = 0;
     let telegramAlertsDispatched = 0;
 
     for (const candidate of candidates) {
       try {
-        // 1. Analyze and verify evidence & contact provenance
+        const oppFingerprint = intelligenceEngine.calculateOpportunityFingerprint(candidate.sourcePlatform, candidate.sourceUrl);
+        const entFingerprint = intelligenceEngine.calculateEntityFingerprint(candidate.prospectName, candidate.businessName, candidate.websiteUrl);
+
+        // 1. Direct Signal Deduplication (Source-level)
+        const existingSignal = await dbService.getOpportunityByOpportunityFingerprint(oppFingerprint);
+        if (existingSignal) {
+          console.log(`[ActionCenter] Skipping direct duplicate signal for fingerprint: ${oppFingerprint}`);
+          continue;
+        }
+
+        // 2. Entity Deduplication (Entity-level)
+        const existingEntity = await dbService.getOpportunityByEntityFingerprint(entFingerprint);
+
+        // 3. Process signal and calculate stats/observations
         const opportunity = await intelligenceEngine.analyzeAndVerify(candidate);
 
-        // 2. Persist to database
-        const saved = await dbService.createOpportunity(opportunity);
-        opportunitiesCreated++;
+        let saved: Opportunity;
 
-        // 3. Dispatch to Telegram interface if credentials exist
+        if (existingEntity) {
+          console.log(`[ActionCenter] Entity duplicate found for ${candidate.businessName} (${entFingerprint}). Merging signals.`);
+          saved = await dbService.mergeOpportunitySignal(
+            existingEntity.id,
+            candidate,
+            opportunity.evidence,
+            opportunity.publicContacts,
+            opportunity.verificationStatus,
+            opportunity.confidenceScores,
+            opportunity.isVerifiedOpportunity
+          );
+          opportunitiesMerged++;
+        } else {
+          // Store new unique entity
+          saved = await dbService.createOpportunity(opportunity);
+          opportunitiesCreated++;
+        }
+
+        // 4. Dispatch alert to Telegram
         const token = settings.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
         const chatId = settings.telegramChatId || process.env.TELEGRAM_CHAT_ID;
-        const isEnabled = settings.telegramEnabled !== false; // deliver by default if token/chatId exist
+        const isEnabled = settings.telegramEnabled !== false;
 
         if (isEnabled && token && chatId) {
           const alertResult = await telegramScoutService.sendOpportunityAlert(saved, settings);
@@ -64,7 +94,7 @@ export class ActionCenter {
       candidatesDiscovered: candidates.length,
       opportunitiesCreated,
       telegramAlertsDispatched,
-      skippedDuplicates: 0,
+      skippedDuplicates: candidates.length - (opportunitiesCreated + opportunitiesMerged),
       errors,
     };
   }
@@ -104,8 +134,26 @@ export class ActionCenter {
       timestamp: new Date().toISOString(),
     };
 
+    const entFingerprint = intelligenceEngine.calculateEntityFingerprint(prospectName, businessName, cleanUrl);
+    const existingEntity = await dbService.getOpportunityByEntityFingerprint(entFingerprint);
+
     const opportunity = await intelligenceEngine.analyzeAndVerify(candidate);
-    const saved = await dbService.createOpportunity(opportunity);
+    let saved: Opportunity;
+
+    if (existingEntity) {
+      console.log(`[ActionCenter] Manual audit matched existing entity fingerprint: ${entFingerprint}. Merging.`);
+      saved = await dbService.mergeOpportunitySignal(
+        existingEntity.id,
+        candidate,
+        opportunity.evidence,
+        opportunity.publicContacts,
+        opportunity.verificationStatus,
+        opportunity.confidenceScores,
+        opportunity.isVerifiedOpportunity
+      );
+    } else {
+      saved = await dbService.createOpportunity(opportunity);
+    }
 
     return saved;
   }

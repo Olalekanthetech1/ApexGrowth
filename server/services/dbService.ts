@@ -2724,6 +2724,8 @@ export class DatabaseService {
     try {
       await db.insert(schema.opportunities).values({
         id: opp.id,
+        opportunityFingerprint: opp.opportunityFingerprint || null,
+        entityFingerprint: opp.entityFingerprint || null,
         title: opp.title,
         prospectName: opp.prospectName,
         businessName: opp.businessName,
@@ -2735,6 +2737,9 @@ export class DatabaseService {
         relevanceSummary: opp.relevanceSummary,
         evidence: opp.evidence as any,
         publicContacts: opp.publicContacts as any,
+        confidenceScores: opp.confidenceScores as any,
+        verificationStatus: opp.verificationStatus as any,
+        isVerifiedOpportunity: opp.isVerifiedOpportunity,
         opportunityScore: opp.opportunityScore,
         outreachStatus: opp.outreachStatus,
         outreachDraft: opp.outreachDraft,
@@ -2747,7 +2752,8 @@ export class DatabaseService {
         notes: opp.notes || null,
       });
       return opp;
-    } catch {
+    } catch (err: any) {
+      console.error('[dbService] createOpportunity DB error, falling back to memory:', err?.message || err);
       this.inMemoryOpportunities.set(opp.id, opp);
       return opp;
     }
@@ -2776,6 +2782,8 @@ export class DatabaseService {
       const rows = await query;
       let mapped: Opportunity[] = rows.map((r) => ({
         id: r.id,
+        opportunityFingerprint: r.opportunityFingerprint || undefined,
+        entityFingerprint: r.entityFingerprint || undefined,
         title: r.title,
         prospectName: r.prospectName,
         businessName: r.businessName,
@@ -2787,6 +2795,9 @@ export class DatabaseService {
         relevanceSummary: r.relevanceSummary,
         evidence: (r.evidence as any) || [],
         publicContacts: (r.publicContacts as any) || [],
+        confidenceScores: (r.confidenceScores as any) || undefined,
+        verificationStatus: (r.verificationStatus as any) || undefined,
+        isVerifiedOpportunity: r.isVerifiedOpportunity,
         opportunityScore: r.opportunityScore as any,
         outreachStatus: r.outreachStatus as any,
         outreachDraft: r.outreachDraft,
@@ -2845,6 +2856,8 @@ export class DatabaseService {
       const r = rows[0];
       return {
         id: r.id,
+        opportunityFingerprint: r.opportunityFingerprint || undefined,
+        entityFingerprint: r.entityFingerprint || undefined,
         title: r.title,
         prospectName: r.prospectName,
         businessName: r.businessName,
@@ -2856,6 +2869,9 @@ export class DatabaseService {
         relevanceSummary: r.relevanceSummary,
         evidence: (r.evidence as any) || [],
         publicContacts: (r.publicContacts as any) || [],
+        confidenceScores: (r.confidenceScores as any) || undefined,
+        verificationStatus: (r.verificationStatus as any) || undefined,
+        isVerifiedOpportunity: r.isVerifiedOpportunity,
         opportunityScore: r.opportunityScore as any,
         outreachStatus: r.outreachStatus as any,
         outreachDraft: r.outreachDraft,
@@ -2871,6 +2887,118 @@ export class DatabaseService {
       };
     } catch {
       return this.inMemoryOpportunities.get(id) || null;
+    }
+  }
+
+  async getOpportunityByOpportunityFingerprint(fingerprint: string): Promise<Opportunity | null> {
+    await this.ensureScoutTablesExist();
+    if (this.useInMemoryScoutStore) {
+      for (const o of this.inMemoryOpportunities.values()) {
+        if (o.opportunityFingerprint === fingerprint) return o;
+      }
+      return null;
+    }
+    try {
+      const rows = await db.select().from(schema.opportunities).where(eq(schema.opportunities.opportunityFingerprint, fingerprint)).limit(1);
+      if (rows.length === 0) return null;
+      return this.getOpportunityById(rows[0].id);
+    } catch {
+      return null;
+    }
+  }
+
+  async getOpportunityByEntityFingerprint(fingerprint: string): Promise<Opportunity | null> {
+    await this.ensureScoutTablesExist();
+    if (this.useInMemoryScoutStore) {
+      for (const o of this.inMemoryOpportunities.values()) {
+        if (o.entityFingerprint === fingerprint) return o;
+      }
+      return null;
+    }
+    try {
+      const rows = await db.select().from(schema.opportunities).where(eq(schema.opportunities.entityFingerprint, fingerprint)).limit(1);
+      if (rows.length === 0) return null;
+      return this.getOpportunityById(rows[0].id);
+    } catch {
+      return null;
+    }
+  }
+
+  async mergeOpportunitySignal(
+    existingId: string,
+    candidate: any,
+    evidence: any[],
+    contacts: any[],
+    verificationStatus?: any,
+    confidenceScores?: any,
+    isVerified?: boolean
+  ): Promise<Opportunity> {
+    const opp = await this.getOpportunityById(existingId);
+    if (!opp) throw new Error(`Existing opportunity #${existingId} not found`);
+
+    const newEvidence = [...opp.evidence];
+    for (const e of evidence) {
+      if (!newEvidence.some((ex) => ex.observation === e.observation)) {
+        newEvidence.push(e);
+      }
+    }
+
+    const newContacts = [...opp.publicContacts];
+    for (const c of contacts) {
+      if (!newContacts.some((cx) => cx.value === c.value && cx.type === c.type)) {
+        newContacts.push(c);
+      }
+    }
+
+    opp.evidence = newEvidence;
+    opp.publicContacts = newContacts;
+
+    if (verificationStatus) {
+      opp.verificationStatus = {
+        identityResolved: opp.verificationStatus?.identityResolved || verificationStatus.identityResolved,
+        companyVerified: opp.verificationStatus?.companyVerified || verificationStatus.companyVerified,
+        contactAvailable: opp.verificationStatus?.contactAvailable || verificationStatus.contactAvailable,
+        problemExplicit: opp.verificationStatus?.problemExplicit || verificationStatus.problemExplicit,
+        auditPerformed: opp.verificationStatus?.auditPerformed || verificationStatus.auditPerformed,
+        isDeduplicated: opp.verificationStatus?.isDeduplicated || verificationStatus.isDeduplicated,
+      };
+    }
+    if (confidenceScores) {
+      opp.confidenceScores = {
+        identity: Math.max(opp.confidenceScores?.identity || 0, confidenceScores.identity),
+        company: Math.max(opp.confidenceScores?.company || 0, confidenceScores.company),
+        contact: Math.max(opp.confidenceScores?.contact || 0, confidenceScores.contact),
+        problem: Math.max(opp.confidenceScores?.problem || 0, confidenceScores.problem),
+      };
+    }
+    if (isVerified !== undefined) {
+      opp.isVerifiedOpportunity = opp.isVerifiedOpportunity || isVerified;
+    }
+
+    opp.updatedAt = new Date().toISOString();
+
+    if (this.useInMemoryScoutStore) {
+      this.inMemoryOpportunities.set(existingId, opp);
+      return opp;
+    }
+
+    try {
+      await db
+        .update(schema.opportunities)
+        .set({
+          evidence: opp.evidence as any,
+          publicContacts: opp.publicContacts as any,
+          confidenceScores: opp.confidenceScores as any,
+          verificationStatus: opp.verificationStatus as any,
+          isVerifiedOpportunity: opp.isVerifiedOpportunity,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.opportunities.id, existingId));
+      return opp;
+    } catch (err: any) {
+      console.error('[dbService] mergeOpportunitySignal DB error, falling back to memory:', err?.message || err);
+      this.inMemoryOpportunities.set(existingId, opp);
+      return opp;
     }
   }
 

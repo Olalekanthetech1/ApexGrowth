@@ -140,6 +140,20 @@ export class TelegramScoutService {
     lines.push(`<b>Opportunity Score:</b> <u>${opportunity.opportunityScore || 'HIGH'}</u>`);
     lines.push(`<b>Contact Verification:</b> PUBLICLY LISTED\n`);
 
+    lines.push(`🚦 <b>LEAD INTEL GATE STATUS</b>`);
+    const status = opportunity.verificationStatus || {
+      identityResolved: false,
+      companyVerified: false,
+      contactAvailable: false,
+      problemExplicit: false,
+      auditPerformed: false,
+    };
+    lines.push(`• 👤 Identity Resolved: ${status.identityResolved ? '✅' : '❌'}`);
+    lines.push(`• 🌐 Company Verified: ${status.companyVerified ? '✅' : '❌'}`);
+    lines.push(`• 📇 Contact Available: ${status.contactAvailable ? '✅' : '❌'}`);
+    lines.push(`• 🔎 Problem Explicit: ${status.problemExplicit ? '✅' : '❌'}`);
+    lines.push(`• 🚀 Gate Status: ${opportunity.isVerifiedOpportunity ? '<b>🟢 VERIFIED LEAD</b>' : '<b>🔴 UNVERIFIED SIGNAL</b>'}\n`);
+
     lines.push(`📝 <b>OUTREACH DRAFT (Status: ${opportunity.outreachStatus || 'DRAFTED'})</b>`);
     const activeDraft = opportunity.refinedDraft || opportunity.outreachDraft || 'No draft formulated yet.';
     lines.push(`<blockquote>${this.escapeHtml(activeDraft)}</blockquote>\n`);
@@ -159,10 +173,17 @@ export class TelegramScoutService {
     const inline_keyboard: any[][] = [];
 
     // Row 1: Primary human control with explicit Send action
-    inline_keyboard.push([
-      { text: '✅ Approve & Send Outreach', callback_data: `opp:approve:${opportunity.id}` },
-      { text: '✏️ Refine', callback_data: `opp:refine:${opportunity.id}` },
-    ]);
+    if (opportunity.isVerifiedOpportunity) {
+      inline_keyboard.push([
+        { text: '✅ Approve & Send Outreach', callback_data: `opp:approve:${opportunity.id}` },
+        { text: '✏️ Refine', callback_data: `opp:refine:${opportunity.id}` },
+      ]);
+    } else {
+      inline_keyboard.push([
+        { text: '❌ Gate Failed (Blocked)', callback_data: `opp:blocked:${opportunity.id}` },
+        { text: '✏️ Refine', callback_data: `opp:refine:${opportunity.id}` },
+      ]);
+    }
 
     // Row 2: Deep inspection
     const row2: any[] = [
@@ -654,6 +675,19 @@ export class TelegramScoutService {
 
         // Opportunity Action Handlers (Approve, Refine, Dossier, Contact, Dismiss, Reply, Retry, Copy, Followup)
         if (action === 'opp' || action === 'approve' || action === 'reject' || action === 'refine') {
+          if (data.startsWith('opp:blocked:')) {
+            const oppId = data.replace('opp:blocked:', '');
+            await this.answerCallbackQuery(token, cb.id, '❌ Sending Blocked: Lead did not pass the Intelligence Gate.');
+            if (chatId) {
+              await this.sendMessage(
+                token,
+                chatId,
+                `⚠️ <b>Outreach Dispatch Blocked</b>\n\nOpportunity #${oppId} does not satisfy all validation parameters in the Lead Intelligence Gate. Outreach draft cannot be sent.`
+              );
+            }
+            return { handled: true };
+          }
+
           if (data.startsWith('opp:approve:') || data.startsWith('approve:') || data.startsWith('opp:retry:')) {
             const oppId = data.startsWith('opp:approve:')
               ? data.replace('opp:approve:', '')
